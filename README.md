@@ -55,6 +55,26 @@ and to detect changes that may indicate deforestation.
   <figcaption>Evolution of annotated pool </figcaption>
 </figure>
 
+## Use Guide
+1. Install the required packages.
+  ```bash
+  pip install -r requirements.txt
+  ```
+  Install PyTorch with the following command:
+  ```bash
+  pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+  ```
+  Install cuda and cudnn if you want to use GPU.
+
+2. Set the local paths in args.yaml file.
+You should change these paths to your local paths.
+  - ``ortho_image``: .tif image with remote sensing data.
+  - ``train_segmentation_path``: .tif image with the ground truth label of the training set. Here, we have the contour of the tree crowns and the tree species.
+  - ``test_segmentation_path``: .tif image with the ground truth label of the test set.
+  - ``mask_path``: .tif image with the mask indicating the region of interest.
+  - ``data_path``: The folder path to save the outputs from the model.
+
+3. Run the main.py file.
 
 ## Contact
 
