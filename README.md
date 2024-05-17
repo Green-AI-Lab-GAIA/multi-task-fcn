@@ -55,7 +55,7 @@ and to detect changes that may indicate deforestation.
   <figcaption>Evolution of annotated pool </figcaption>
 </figure>
 
-## Use Guide
+## User Guide
 1. Install the required packages.
   ```bash
   pip install -r requirements.txt
@@ -74,7 +74,40 @@ You should change these paths to your local paths.
   - ``mask_path``: .tif image with the mask indicating the region of interest.
   - ``data_path``: The folder path to save the outputs from the model.
 
-3. Run the main.py file.
+3. Set the some parameters
+- ``nb_class``: The number of classes in the segmentation label.
+- ``size_crops``: The size of the crops to be used in the training. Adjust this parameter according to the available memory.
+- ``batch_size``: The batch size for the training.
+- ``num_iter``: The number cycles of active learning.
+- ``num_epochs``: The number of epochs for the training.
+- ``num_samples``: The number of samples used to train in each epoch.
+
+4. Run the main.py file.
+
+## Input Data Format
+### Ortho Image
+- The ortho image is a .tif file with remote sensing data. Example:
+<figure>
+  <img src="https://github.com/Green-AI-Lab-GAIA/multi-task-fcn/blob/main/views/orthoimage_example.png?raw=true"/>
+  <figcaption>Ortho Image Example</figcaption>
+</figure>
+
+### Ground Truth Segmentation Label
+- The ground truth segmentation label is a .tif file with the contour of the tree crowns and the tree species. This data should be divided into two sets: training and test. The polygons should be labeled with the tree species ID, from 1 to n.
+The background should be labeled with 0. The image should have only one channel.
+Example of the training set:
+<figure>
+  <img src="https://github.com/Green-AI-Lab-GAIA/multi-task-fcn/blob/main/views/train_example.png?raw=true"/>
+  <figcaption>Ground Truth Segmentation Label Example</figcaption>
+</figure>
+
+### Mask
+The mask is one channel .tif file with the region of interest. The mask should be a binary image, where 1 indicates the region of interest and 0 indicates the background.
+Example:
+<figure>
+  <img src="https://github.com/Green-AI-Lab-GAIA/multi-task-fcn/blob/main/views/mask_example.png?raw=true"/>
+  <figcaption>Mask Example</figcaption>
+</figure>
 
 ## Contact
 
