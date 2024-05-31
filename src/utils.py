@@ -784,9 +784,8 @@ def get_pad_width(crop_size:int, coord:np.ndarray, image_shape:tuple):
 
     return pad_width
 
-
-def get_crop_image(image, image_shape, coord, crop_size):
-
+def get_slice_window(image_shape, coord, crop_size):
+    
     IMAGE_HEIGHT, IMAGE_WIDTH = image_shape[-2], image_shape[-1]
     
     start_row = np.maximum(0, coord[0] - crop_size // 2)
@@ -795,7 +794,13 @@ def get_crop_image(image, image_shape, coord, crop_size):
 
     start_column = np.maximum(0, coord[1] - crop_size // 2)    
     end_column = np.minimum(IMAGE_WIDTH, coord[1] + crop_size // 2)
+    
+    return start_row, end_row, start_column, end_column
 
+
+def get_crop_image(image, image_shape, coord, crop_size):
+
+    start_row, end_row, start_column, end_column = get_slice_window(image_shape, coord, crop_size)
 
     if len(image.shape) == 3:
         image_crop = np.array(

@@ -437,11 +437,11 @@ def train_iteration(current_iter_folder:str, args:dict):
         image_path=args.ortho_image,
         segmentation_path=segmentation_path,
         distance_map_path=distance_map_path,
-        dataset_type="train",
         samples=args.samples,
         augment=args.augment,
         crop_size=args.size_crops
     )
+    
     train_dataset.standardize_image_channels()
     
     train_loader = torch.utils.data.DataLoader(
@@ -459,7 +459,6 @@ def train_iteration(current_iter_folder:str, args:dict):
         image_path=args.ortho_image,
         segmentation_path=segmentation_path,
         distance_map_path=distance_map_path,
-        dataset_type="val",
         samples=args.samples//5,
         augment=args.augment,
         crop_size=args.size_crops
