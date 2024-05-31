@@ -87,6 +87,20 @@ class DatasetFromCoord(Dataset):
         return torch.tensor(image_crop)
 
 
+    def copy_and_paste_augmentation(self, image:torch.Tensor, segmentation:torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # random select a crop from the image
+        random_row = np.random.randint(self.crop_size, self.image_shape[1] - self.crop_size)
+        random_column = np.random.randint(self.crop_size, self.image_shape[2] - self.crop_size)
+        
+        image_crop = self.read_window_around_coord(
+            coord=[random_row, random_column],
+            image=self.image,
+        )
+        
+        # paste the crop into the image
+        return torch.where(segmentation > 0, image, image_crop)
+        
+        
     def __getitem__(self, idx) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get the data from the dataset
         
@@ -134,6 +148,9 @@ class DatasetFromCoord(Dataset):
 
 
         if self.augment:
+            if np.random.random() < 0.5:
+                image = self.copy_and_paste_augmentation(image, segmentation)
+                    
             # Run Horizontal Flip
             if np.random.random() > 0.5:
                 image = transforms.functional.hflip(image)
