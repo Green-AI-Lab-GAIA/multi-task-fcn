@@ -1,9 +1,10 @@
+import argparse
 import gc
 import math
 import os
 import shutil
-from os.path import dirname, exists, isfile, join
 from multiprocessing import Process
+from os.path import dirname, exists, isfile, join
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,6 +20,7 @@ from evaluation import evaluate_iteration
 from generate_distance_map import generate_distance_map
 from pred2raster import pred2raster
 from sample_selection import get_new_segmentation_sample
+from src.dataset import DatasetFromCoord
 from src.io_operations import (ParquetUpdater, array2raster,
                                convert_tiff_to_npy, get_image_metadata,
                                get_npy_filepath_from_tiff, load_args,
@@ -28,9 +30,9 @@ from src.logger import create_logger
 from src.metrics import evaluate_component_metrics, evaluate_metrics
 from src.model import (build_model, define_loader, eval, load_weights,
                        save_checkpoint, train)
-from src.dataset import DatasetFromCoord
 from src.utils import (check_folder, fix_random_seeds, get_device, oversamp,
-                       print_sucess, restart_from_checkpoint, restore_checkpoint_variables)
+                       print_sucess, restart_from_checkpoint,
+                       restore_checkpoint_variables)
 from visualization import generate_labels_view
 
 gc.set_threshold(0)
@@ -729,28 +731,35 @@ def compile_metrics(current_iter_folder, args):
 ### SETUP ###
 #############
 
-ROOT_PATH = dirname(__file__)
-args = load_args(join(ROOT_PATH, "args.yaml"))
-
-version_name = os.path.split(args.data_path)[-1]
-
-logger = create_logger(module_name=__name__, filename=version_name)
-
-logger.info(f"################### {version_name.upper()} ###################")
-
-# create output path
-check_folder(args.data_path)
-
-# Save args state into data_path
-save_yaml(args, join(args.data_path, "args.yaml"))
-
-
-##### LOOP #####
-
-# Set random seed
-fix_random_seeds(args.seed)
 
 if __name__ == "__main__":
+    ROOT_PATH = dirname(__file__)
+    
+    parser = argparse.ArgumentParser(description="Get the arguments file")
+    parser.add_argument('file_path', nargs='?', default='args.yaml', help='Path to the file (default: args.yaml)')
+    args_path = parser.parse_args().file_path
+    
+    args = load_args(args_path)
+    print("Args loaded from",  )
+
+    version_name = os.path.split(args.data_path)[-1]
+
+    logger = create_logger(module_name=__name__, filename=version_name)
+
+    logger.info(f"################### {version_name.upper()} ###################")
+
+    # create output path
+    check_folder(args.data_path)
+
+    # Save args state into data_path
+    save_yaml(args, join(args.data_path, "args.yaml"))
+
+
+    ##### LOOP #####
+
+    # Set random seed
+    fix_random_seeds(args.seed)
+
     
     while True:
 
