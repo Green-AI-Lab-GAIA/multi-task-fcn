@@ -339,6 +339,7 @@ def train_epochs(last_checkpoint:str,
         logger.info("============ Starting epoch %i ... ============" % epoch)
 
         # train the network
+        logger.info("Training the model...")
         epoch, scores_tr = train(train_loader=train_loader, 
                                  model=model, 
                                  optimizer=optimizer, 
@@ -347,6 +348,7 @@ def train_epochs(last_checkpoint:str,
                                  figures_path=figures_path, 
                                  lambda_weight=args.lambda_weight)
         
+        logger.info("Evaluating the model...")
         f1_avg, f1_by_class_avg = eval(val_loader, model)
         
         ### Save training stats ####
