@@ -24,6 +24,7 @@ class DatasetFromCoord(Dataset):
                 crop_size:int,
                 samples:int = None,
                 augment:bool = False,
+                copy_paste_augmentation:bool = False
                 ) -> None: 
         
         super().__init__()
@@ -35,6 +36,8 @@ class DatasetFromCoord(Dataset):
         self.samples = samples
         self.crop_size = crop_size
         self.augment = augment
+        
+        self.copy_paste_augmentation = copy_paste_augmentation
         
         self.img_segmentation = load_image(segmentation_path)
         self.img_depth = load_image(distance_map_path)
@@ -148,7 +151,7 @@ class DatasetFromCoord(Dataset):
 
 
         if self.augment:
-            if np.random.random() < 0.5:
+            if np.random.random() < 0.5 and self.copy_paste_augmentation:
                 image = self.copy_and_paste_augmentation(image, segmentation)
                     
             # Run Horizontal Flip

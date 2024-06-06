@@ -441,7 +441,8 @@ def train_iteration(current_iter_folder:str, args:dict):
         distance_map_path=distance_map_path,
         samples=args.samples,
         augment=args.augment,
-        crop_size=args.size_crops
+        crop_size=args.size_crops,
+        copy_paste_augmentation=args.copy_and_paste_augmentation
     )
     
     train_dataset.standardize_image_channels()
@@ -461,9 +462,10 @@ def train_iteration(current_iter_folder:str, args:dict):
         image_path=args.ortho_image,
         segmentation_path=segmentation_path,
         distance_map_path=distance_map_path,
-        samples=args.samples//5,
+        samples=args.samples//3,
         augment=args.augment,
-        crop_size=args.size_crops
+        crop_size=args.size_crops,
+        copy_paste_augmentation=False
     )
     val_dataset.standardize_image_channels()
 
