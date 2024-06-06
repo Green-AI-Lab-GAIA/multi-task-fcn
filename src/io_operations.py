@@ -2,7 +2,7 @@ import ast
 import os
 import sys
 from os.path import dirname, join
-from typing import Iterable
+from typing import Iterable, Tuple
 
 import numpy as np
 import pandas as pd
@@ -312,6 +312,15 @@ def get_image_shape(tiff_file:str) -> dict:
     
     return (img_metadata["count"], img_metadata["height"], img_metadata["width"])
 
+def get_image_pixel_scale(tiff_file:str) -> Tuple[float, float]:
+    """
+    Returns
+    -------
+    Tuple[float, float]
+        Pixel scale in the format (x, y)
+    """
+    with rasterio.open(tiff_file) as src:
+        pixel_scale = src.res
 
 
 
