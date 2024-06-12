@@ -214,7 +214,6 @@ def evaluate_overlap(prediction_path:float,
         ortho_image_shape,
         args.nb_class,
         args.arch, 
-        args.filters, 
         args.is_pretrained,
         psize = args.size_crops,
         dropout_rate = args.dropout_rate

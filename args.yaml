@@ -32,9 +32,6 @@ is_pretrained: True
 # Dropout rate for deepvlab clasisfication traning
 dropout_rate: 0.65
 
-# Filter for the ResUnet for trained from scratch
-filters: [32, 32, 32, 32]
-
 # regularization weight of distance map
 lambda_weight: 1
 

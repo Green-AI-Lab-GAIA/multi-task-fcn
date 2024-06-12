@@ -488,7 +488,6 @@ def train_iteration(current_iter_folder:str, args:dict):
         (orthoimage_meta["count"], orthoimage_meta["height"], orthoimage_meta["width"]),
         args.nb_class,  
         args.arch, 
-        args.filters, 
         args.is_pretrained,
         psize = args.size_crops,
         dropout_rate = args.dropout_rate
