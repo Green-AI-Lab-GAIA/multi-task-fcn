@@ -16,10 +16,12 @@ import torch.nn.parallel
 import torch.optim
 from tqdm import tqdm
 
+from scipy.ndimage import label
+
 from evaluation import evaluate_iteration
 from generate_distance_map import generate_distance_map
 from pred2raster import pred2raster
-from sample_selection import get_new_segmentation_sample
+from sample_selection import get_new_segmentation_sample, get_components_stats
 from src.dataset import DatasetFromCoord
 from src.io_operations import (ParquetUpdater, array2raster,
                                convert_tiff_to_npy, get_image_metadata,
@@ -34,7 +36,7 @@ from src.utils import (check_folder, fix_random_seeds, get_device, oversamp,
                        print_sucess, restart_from_checkpoint,
                        restore_checkpoint_variables)
 from visualization import generate_labels_view
-
+import wandb
 gc.set_threshold(0)
 
 plt.set_loglevel(level = 'info')
@@ -357,9 +359,12 @@ def train_epochs(last_checkpoint:str,
         eval_data["epoch"] = epoch
         eval_data["iter"] = current_iter
         
+        wandb.log({"train_loss": scores_tr,
+                   "f1_avg": f1_avg,
+                   "f1_by_class_avg": f1_by_class_avg
+        })
         training_stats.update(eval_data)
 
-        gc.collect()
         
         logger.info("scores_tr: {}".format(f1_avg))
 
@@ -695,8 +700,6 @@ def generate_distance_map_for_next_iteration(current_iter_folder):
 
 
 def compile_metrics(current_iter_folder, args):
-    # read test segmentation 
-    DATA_PATH = dirname(current_iter_folder)
 
     GROUND_TRUTH_TEST_PATH = args.test_segmentation_path
     ground_truth_test = read_tiff(GROUND_TRUTH_TEST_PATH)
@@ -709,23 +712,47 @@ def compile_metrics(current_iter_folder, args):
 
     ### Save test metrics ###
     metrics_test = evaluate_metrics(predicted_seg, ground_truth_test)
-
+    metrics_test = {f"test/{key}": value for key, value in metrics_test.items()}.copy()
+    
+    wandb.log(metrics_test)
+    
     save_yaml(metrics_test, join(current_iter_folder,'test_metrics.yaml'))    
 
     
     ### Save train metrics ###
     metrics_train = evaluate_metrics(predicted_seg, ground_truth_train, args.nb_class)
-            
-    save_yaml(metrics_train, join(current_iter_folder,'train_metrics.yaml'))
+    metrics_train = {f"train/{key}": value for key, value in metrics_train.items()}.copy()
     
+    wandb.log(metrics_train)
+    
+    save_yaml(metrics_train, join(current_iter_folder,'train_metrics.yaml'))
 
+ 
+
+def compile_component_metrics(current_iter_folder, args):
+    
+    GROUND_TRUTH_TEST_PATH = args.test_segmentation_path
+    ground_truth_test = read_tiff(GROUND_TRUTH_TEST_PATH)
+    
     ### Save test component metrics ###
     HIGH_PROB_COMPONENTS_PATH = join(current_iter_folder,'all_labels_test_metrics.yaml')
     
     all_labels = read_tiff(join(current_iter_folder, "new_labels", "all_labels_set.tif"))
 
     all_labels_metrics = evaluate_component_metrics(ground_truth_test, all_labels, args.nb_class)
-
+    
+    all_labels_metrics = {f"all_labels_{key}": value for key, value in all_labels_metrics.items()}.copy()
+    
+    wandb.log(all_labels_metrics)
+    
+    all_labels_stats = get_components_stats(label(all_labels), all_labels)
+    num_trees_by_class = all_labels_stats.groupby("tree_type").nunique()
+    
+    # create a dict in pair of this data frame
+    num_trees_by_class = num_trees_by_class.to_dict()
+    
+    wandb.log(num_trees_by_class)
+    
     save_yaml(all_labels_metrics, HIGH_PROB_COMPONENTS_PATH)
 
 
@@ -757,6 +784,7 @@ if __name__ == "__main__":
     # Save args state into data_path
     save_yaml(args, join(args.data_path, "args.yaml"))
 
+    run = wandb.init(project="segmentation", name=version_name, config=args)
 
     ##### LOOP #####
 
@@ -825,8 +853,12 @@ if __name__ == "__main__":
         evaluate_iteration(current_iter_folder, args)
 
         pred2raster(current_iter_folder, args)
+        
+        compile_metrics(current_iter_folder, args)
 
         generate_labels_for_next_iteration(current_iter_folder, args)
+        
+        compile_component_metrics(current_iter_folder, args)
         
         generate_distance_map_for_next_iteration(current_iter_folder)
 
@@ -834,8 +866,6 @@ if __name__ == "__main__":
 
         delete_useless_files(current_iter_folder = current_iter_folder)
         
-        compile_metrics(current_iter_folder, args)
-
         generate_labels_view(current_iter_folder, args.ortho_image, args.train_segmentation_path)
 
         print_sucess("Distance map generated")
