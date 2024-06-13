@@ -282,8 +282,8 @@ sweep_config = {
 
 def sweep():
     
-    sweep_id = "z8k7yte5"
-    
+    sweep_id = wandb.sweep(sweep_config, project="tune_parameters")
+
     logger.info(f"Sweep id: {sweep_id}")
     
     wandb.agent(sweep_id, function=tune, count=50)
