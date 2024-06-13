@@ -505,7 +505,7 @@ def select_good_samples(old_pred_map:np.ndarray,
     median_filter = (
         (comp_new_stats["diff_area"] <= np.float32(args.upper_limit_area_rlted_to_tree_type)) & 
         (comp_new_stats["diff_area"] >= np.float32(args.lower_limit_area_rlted_to_tree_type)) & 
-        (comp_new_stats["diff_soli"] >= -0.05)
+        (comp_new_stats["diff_soli"] >= np.float32(args.lower_limit_solidity_rlted_to_tree_type))
     )
 
     # Select componentes based on some metrics

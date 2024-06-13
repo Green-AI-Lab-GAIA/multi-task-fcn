@@ -84,9 +84,10 @@ num_iter : 20
 
 lower_limit_area: 500
 upper_limit_area: "inf"
-
-lower_limit_area_rlted_to_tree_type: -0.3
-upper_limit_area_rlted_to_tree_type: 0.7
+ 
+lower_limit_area_rlted_to_tree_type: -0.4
+upper_limit_area_rlted_to_tree_type: 2.0
+lower_limit_solidity_rlted_to_tree_type: -1.0
 
 # Availables scales: "log", None
 scale_area: "log"
