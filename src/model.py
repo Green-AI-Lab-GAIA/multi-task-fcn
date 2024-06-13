@@ -329,6 +329,8 @@ def train(train_loader:torch.utils.data.DataLoader,
     DEVICE = get_device()
 
     model.train()
+    model.to(DEVICE)
+    
     loss_avg = AverageMeter()
     
     # define functions
