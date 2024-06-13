@@ -12,8 +12,10 @@ from src.metrics import evaluate_metrics
 from src.model import build_model, train, eval
 from src.utils import check_folder, get_device, AttrDict
 from src.dataset import DatasetForInference, DatasetFromCoord
-
+from src.logger import create_logger
 import torch.backends.cudnn as cudnn
+
+logger = create_logger("tune_parameters", "tune_parameters.log")
 
 DEVICE = get_device()
 
@@ -71,7 +73,7 @@ def train_epochs(config):
         drop_last = True,
         shuffle = True,
     )
-
+    logger.info("Data loaded")
 
     orthoimage_meta = get_image_metadata(ORTHOIMAGE_PATH)
     ortho_image_shape = (orthoimage_meta["count"], orthoimage_meta["height"], orthoimage_meta["width"])
@@ -84,7 +86,8 @@ def train_epochs(config):
         psize = config.size_crops,
         dropout_rate = config.dropout_rate,
     )
-
+    logger.info("Model built")
+    
     ###### BULD OPTMIZER #######
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -104,12 +107,15 @@ def train_epochs(config):
     )
     
     ######## TRAIN MODEL #########
+    logger.info("Start training")
     cudnn.benchmark = True
     count_early = 0
     best_val = 0
     for epoch in range(0, config.epochs):
+        logger.info(f"Epoch {epoch}")
 
         if count_early == config.patience:
+            logger.info("Early stopping")
             break
         
         np.random.shuffle(train_loader.dataset.coords)
@@ -143,6 +149,7 @@ def train_epochs(config):
     torch.cuda.empty_cache()
     
     ######### INFERENCE ##########
+    logger.info("Start inference")
     test_dataset = DatasetForInference(
         ORTHOIMAGE_PATH,
         config.size_crops,
@@ -153,7 +160,7 @@ def train_epochs(config):
 
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=config.batch_size,
+        batch_size=config.batch_size*4,
         num_workers=config.num_workers,
         pin_memory=True,
         drop_last=False,
@@ -167,6 +174,7 @@ def train_epochs(config):
         num_classes = config.nb_class,
     )
     
+    logger.info("Metrics evaluation")
     GROUND_TRUTH_TEST = read_tiff("/home/luiz.luz/multi-task-fcn/amazon_input_data/segmentation/test_set.tif")
     metrics_test = evaluate_metrics(pred_class, GROUND_TRUTH_TEST)
 
@@ -177,7 +185,11 @@ def train_epochs(config):
         "accuracy": metrics_test["Accuracy"],
     })
     
+    logger.info("Time spent")
     wandb.log({"time_spent": time.time() - current_time_seconds})
+    logger.info(f"Time spent: {(time.time() - current_time_seconds)/60} minutes")
+    
+    logger.info("Save model")
     torch.save(model.state_dict(), 
                join(wandb.run.dir, "model.pth"))
     
@@ -269,8 +281,13 @@ sweep_config = {
 }
 
 def sweep():
-    sweep_id = wandb.sweep(sweep_config, project="tune_parameters")
+    
+    sweep_id = "z8k7yte5"
+    
+    logger.info(f"Sweep id: {sweep_id}")
+    
     wandb.agent(sweep_id, function=tune, count=50)
+
 
 def test_code(sweep_config):
     # init wandb offline
