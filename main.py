@@ -348,7 +348,8 @@ def train_epochs(last_checkpoint:str,
                                  epoch=epoch, 
                                  lr_schedule=lr_schedule, 
                                  figures_path=figures_path, 
-                                 lambda_weight=args.lambda_weight)
+                                 lambda_weight=args.lambda_weight,
+                                 batch_norm_layer=args.batch_norm_layer,)
         
         logger.info("Evaluating the model...")
         f1_avg, f1_by_class_avg = eval(val_loader, model)
