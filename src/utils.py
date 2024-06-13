@@ -822,7 +822,7 @@ def get_crop_image(image, image_shape, coord, crop_size):
 
 def oversample(coords: np.ndarray, 
                coords_label: np.ndarray, 
-               method: Literal["max", "median"]) -> np.ndarray:
+               method: Literal["max", "median", "min"]) -> np.ndarray:
     """Oversamples data to balance classes based on segmentation samples.
 
     Parameters
@@ -851,6 +851,9 @@ def oversample(coords: np.ndarray,
     
     elif method == "median":
         upper_samp_limit = int(np.median(count))
+    
+    elif method == "min":
+        upper_samp_limit = np.min(count)
     
     else:
         raise NotImplementedError(f"Method ``{method}`` were not implemented yet.")
