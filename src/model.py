@@ -21,7 +21,7 @@ from src.metrics import evaluate_f1, evaluate_metrics
 from src.resnet import ResUnet
 from src.utils import (AverageMeter, check_folder, get_device, plot_figures)
 from src.io_operations import load_norm, read_yaml
-
+import wandb
 args = read_yaml(join(ROOT_PATH, "args.yaml"))
 
 logger = getLogger("__main__")
@@ -75,7 +75,6 @@ def define_loader(orto_img:str, gt_lab:np.ndarray, size_crops:int, test=False) -
 def build_model(image_shape:list, 
                 num_classes:int, 
                 arch:Literal["resunet", "deeplabv3_resnet50", "deeplabv3+", "deeplabv3+_resnet9"], 
-                filters:list, 
                 pretrained:bool, 
                 psize:int,
                 dropout_rate:float)->nn.Module:
@@ -113,7 +112,7 @@ def build_model(image_shape:list,
         model = ResUnet(
             channel=image_shape[0], 
             nb_classes = num_classes, 
-            filters=filters)
+            filters= [32, 32, 32, 32])
 
     # build model
     elif arch == "deeplabv3_resnet50":
@@ -383,6 +382,8 @@ def train(train_loader:torch.utils.data.DataLoader,
         # update the average loss
         loss_avg.update(loss)
 
+        wandb.log({"train/loss": loss})
+        
         gc.collect()
 
         # Evaluate summaries only once in a while
