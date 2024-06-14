@@ -3,7 +3,8 @@ from tqdm import tqdm
 import wandb
 import torch
 import time
-from os.path import join
+
+from os.path import join, abspath, dirname
 
 from evaluation import predict_network
 from main import get_learning_rate_schedule, train_epochs
@@ -13,6 +14,7 @@ from src.model import build_model, train, eval
 from src.utils import check_folder, get_device, AttrDict
 from src.dataset import DatasetForInference, DatasetFromCoord
 from src.logger import create_logger
+import argparse
 import torch.backends.cudnn as cudnn
 
 logger = create_logger("tune_parameters", "tune_parameters.log")
@@ -20,18 +22,22 @@ logger = create_logger("tune_parameters", "tune_parameters.log")
 DEVICE = get_device()
 
 def train_epochs(config):
-    SEGMENTATION_PATH = "/home/luiz.luz/multi-task-fcn/2x_amazon_input_data/segmentation/train_set.tif"
-    DISTANCE_MAP_PATH = "/home/luiz.luz/multi-task-fcn/2x_amazon_input_data/distance_map/train_distance_map.tif"
-    ORTHOIMAGE_PATH = "/home/luiz.luz/multi-task-fcn/2x_amazon_input_data/orthoimage/NOV_2017_FINAL_004.tif"
+
+    SEGMENTATION_PATH = abspath(config.segmentation_path)
+    DISTANCE_MAP_PATH = abspath(config.distance_map_path)
+    ORTHOIMAGE_PATH = abspath(config.orthoimage_path)
+    GROUND_TRUTH_TEST_PATH = abspath(config.ground_truth_test_path)
+    
+    GROUND_TRUTH_TEST = read_tiff(GROUND_TRUTH_TEST_PATH)
     
     current_time_seconds = time.time()
     
     wandb.log({"time": current_time_seconds})
     
     train_dataset = DatasetFromCoord(
-        image_path=ORTHOIMAGE_PATH,
-        segmentation_path=SEGMENTATION_PATH,
-        distance_map_path=DISTANCE_MAP_PATH,
+        image_path=config.orthoimage_path,
+        segmentation_path=config.segmentation_path,
+        distance_map_path=config.distance_map_path,
         samples=config.samples,
         augment=config.augment,
         crop_size=config.size_crops,
@@ -175,15 +181,13 @@ def train_epochs(config):
     )
     
     logger.info("Metrics evaluation")
-    GROUND_TRUTH_TEST = read_tiff("/home/luiz.luz/multi-task-fcn/amazon_input_data/segmentation/test_set.tif")
+    
     metrics_test = evaluate_metrics(pred_class, GROUND_TRUTH_TEST)
 
-    wandb.log({
-        "f1_score": metrics_test["avgF1"],
-        "precision": metrics_test["avgPrec"],
-        "recall": metrics_test["avgRec"],
-        "accuracy": metrics_test["Accuracy"],
-    })
+    wandb.log({"f1_score": metrics_test["avgF1"]})
+    wandb.log({"precision": metrics_test["avgPre"]})
+    wandb.log({"recall": metrics_test["avgRec"]})
+    wandb.log({"accuracy": metrics_test["Accuracy"]})
     
     logger.info("Time spent")
     wandb.log({"time_spent": time.time() - current_time_seconds})
@@ -193,6 +197,14 @@ def train_epochs(config):
     torch.save(model.state_dict(), 
                join(wandb.run.dir, "model.pth"))
     
+    folder_to_save = join(dirname(__file__), "results", f"model_{current_time_seconds}")
+    check_folder(folder_to_save)
+    
+    torch.save(model.state_dict(), 
+               join(folder_to_save, "model.pth"))
+    
+    save_yaml(dict(config), join(folder_to_save, "config.yaml"))
+               
     # free up cuda memory
     cudnn.benchmark = False
     torch.cuda.empty_cache()
@@ -205,87 +217,11 @@ def tune():
         train_epochs(config)
         
 
-sweep_config = {
-    'method': 'random',
-    "name": "tune_parameters",
-    'metric': {
-        "name":"f1_score",
-        "goal":"maximize"
-    },
-    'parameters':{
-        "overlap":{
-            "values":[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        },
-        "copy_and_paste_augmentation":{
-            "values":[True, False]
-        },
-        "dropout_rate":{
-            "values":[0.1,0.2,0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        },
-        "size_crops":{
-            "values":[256]
-        },
-        "batch_norm_layer":{
-            "values":[True, False]
-        },
-        "lambda_weight":{
-            "values":[0.5,1,2,3,4,5]
-        },
-        "pretrained":{
-            "values":[True, False]
-        },
-        "standardize":{
-            "values":[True, False]
-        },
-        "augment":{
-            "value":True
-        },
-        "samples":{
-            "values":[2500, 5000, 10000]
-        },
-        "batch_size":{
-            "value":64
-        },
-        "nb_class":{
-            "value":17
-        },
-        "arch":{
-            "value":"deeplabv3_resnet50"
-        },
-        "base_lr":{
-            "value":0.01
-        },
-        "final_lr":{
-            "value":0.0001
-        },
-        "weight_decay":{
-            "value":1e-06
-        },
-        "warmup_epochs":{
-            "value":5
-        },
-        "start_warmup":{
-            "value":0
-        },
-        "epochs":{
-            "value":30
-        },
-        "patience":{
-            "value":5
-        },
-        "num_workers":{
-            "value":8
-        }
-    
-    }
-}
-
 def sweep():
     
-    sweep_id = "fmv7qxrg"
-    logger.info(f"Sweep id: {sweep_id}")
+    logger.info(f"Sweep id: {SWEEP_ID}")
     
-    wandb.agent(sweep_id, function=tune, count=50, project="tune_parameters")
+    wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
 
 
 def test_code(sweep_config):
@@ -305,5 +241,12 @@ def test_code(sweep_config):
     
     train_epochs(config)
     
-if __name__ == "__main__":
-    sweep()
+
+if __name__ == "__main__":  
+    SWEEP_FILE = "tune_parameters.yaml"
+    sweep_config = read_yaml(SWEEP_FILE)
+    
+    # SWEEP_ID = wandb.sweep(sweep_config, project="test_tune")
+    # print(SWEEP_ID)
+    SWEEP_ID = "3d7jz2jw"
+    wandb.agent(SWEEP_ID, function=tune, count=50, project="test_tune")

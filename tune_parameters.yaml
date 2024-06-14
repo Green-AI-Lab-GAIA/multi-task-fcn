@@ -1,0 +1,56 @@
+method: random
+name: tune_parameters
+metric:
+  name: f1_score
+  goal: maximize
+parameters:
+  overlap:
+    values: [0.1, 0.2, 0.3, 0.4, 0.5]
+  copy_and_paste_augmentation:
+    values: [true, false]
+  dropout_rate:
+    values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  size_crops:
+    values: [256]
+  batch_norm_layer:
+    values: [true, false]
+  lambda_weight:
+    values: [0.5, 1, 2, 3, 4, 5]
+  pretrained:
+    values: [true, false]
+  standardize:
+    values: [true, false]
+  augment:
+    value: true
+  samples:
+    values: [2500, 5000, 10000]
+  batch_size:
+    value: 64
+  nb_class:
+    value: 17
+  arch:
+    value: deeplabv3_resnet50
+  base_lr:
+    value: 0.01
+  final_lr:
+    value: 0.0001
+  weight_decay:
+    value: 1e-06
+  warmup_epochs:
+    value: 5
+  start_warmup:
+    value: 0
+  epochs:
+    value: 30
+  patience:
+    value: 5
+  num_workers:
+    value: 8
+  orthoimage_path:
+    value: "2x_amazon_input_data/orthoimage/orthoimage.tif"
+  distance_map_path:
+    value: "2x_amazon_input_data/distance_map/train_distance_map.tif"
+  segmentation_path:
+    value: "2x_amazon_input_data/segmentation/train_set.tif"
+  ground_truth_test_path:
+    value: "2x_amazon_input_data/segmentation/test_set.tif"
