@@ -201,7 +201,7 @@ def evaluate_overlap(prediction_path:float,
 
     test_loader = torch.utils.data.DataLoader(
             test_dataset,
-            batch_size=args.batch_size,
+            batch_size=args.batch_size*2,
             num_workers=args.workers,
             pin_memory=True,
             drop_last=False,
