@@ -7,7 +7,7 @@ from os.path import join
 
 from evaluation import predict_network
 from main import get_learning_rate_schedule, train_epochs
-from src.io_operations import get_image_metadata, read_tiff
+from src.io_operations import get_image_metadata, read_tiff, read_yaml, save_yaml
 from src.metrics import evaluate_metrics
 from src.model import build_model, train, eval
 from src.utils import check_folder, get_device, AttrDict
@@ -20,9 +20,9 @@ logger = create_logger("tune_parameters", "tune_parameters.log")
 DEVICE = get_device()
 
 def train_epochs(config):
-    SEGMENTATION_PATH = "/home/luiz.luz/multi-task-fcn/amazon_input_data/segmentation/train_set.tif"
-    DISTANCE_MAP_PATH = "/home/luiz.luz/multi-task-fcn/6_amazon_data/iter_000/distance_map/train_distance_map.tif"
-    ORTHOIMAGE_PATH = "/home/luiz.luz/multi-task-fcn/amazon_input_data/orthoimage/NOV_2017_FINAL_004.tif"
+    SEGMENTATION_PATH = "/home/luiz.luz/multi-task-fcn/2x_amazon_input_data/segmentation/train_set.tif"
+    DISTANCE_MAP_PATH = "/home/luiz.luz/multi-task-fcn/2x_amazon_input_data/distance_map/train_distance_map.tif"
+    ORTHOIMAGE_PATH = "/home/luiz.luz/multi-task-fcn/2x_amazon_input_data/orthoimage/NOV_2017_FINAL_004.tif"
     
     current_time_seconds = time.time()
     
@@ -223,7 +223,7 @@ sweep_config = {
             "values":[0.1,0.2,0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         },
         "size_crops":{
-            "values":[512]
+            "values":[256]
         },
         "batch_norm_layer":{
             "values":[True, False]
@@ -244,7 +244,7 @@ sweep_config = {
             "values":[2500, 5000, 10000]
         },
         "batch_size":{
-            "value":16
+            "value":64
         },
         "nb_class":{
             "value":17
@@ -282,11 +282,10 @@ sweep_config = {
 
 def sweep():
     
-    sweep_id = wandb.sweep(sweep_config, project="tune_parameters")
-
+    sweep_id = "fmv7qxrg"
     logger.info(f"Sweep id: {sweep_id}")
     
-    wandb.agent(sweep_id, function=tune, count=50)
+    wandb.agent(sweep_id, function=tune, count=50, project="tune_parameters")
 
 
 def test_code(sweep_config):
