@@ -246,7 +246,7 @@ if __name__ == "__main__":
     SWEEP_FILE = "tune_parameters.yaml"
     sweep_config = read_yaml(SWEEP_FILE)
     
-    # SWEEP_ID = wandb.sweep(sweep_config, project="test_tune")
+    # SWEEP_ID = wandb.sweep(sweep_config, project="tune_parameters")
     # print(SWEEP_ID)
-    SWEEP_ID = "3d7jz2jw"
-    wandb.agent(SWEEP_ID, function=tune, count=50, project="test_tune")
+    SWEEP_ID = "iw33ssxx"
+    wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
