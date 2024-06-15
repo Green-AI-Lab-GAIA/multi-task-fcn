@@ -210,7 +210,7 @@ def evaluate_overlap(prediction_path:float,
     
         
     model = DeepLabv3(
-        in_channels = ortho_image_shape,
+        in_channels = ortho_image_shape[0],
         num_classes = args.nb_class, 
         pretrained = args.is_pretrained, 
         dropout_rate = args.dropout_rate,
