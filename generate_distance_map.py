@@ -88,16 +88,12 @@ def generate_distance_map(input_image_path:str, output_image_path:str, sigma:int
 
 
 if __name__ == "__main__":
-    from src.utils import load_args    
     
-    args = load_args("args.yaml")
-    
-    train_input_path = os.path.join(args.data_path, args.train_segmentation_path)
-    
-    train_output_path = os.path.join(args.data_path, "iter_000" ,"train_distance_map.tif")
-    
-    check_folder(os.path.dirname(train_output_path))
 
+    train_input_path = "2x_amazon_input_data/segmentation/train_set.tif"
+    train_output_path = "2x_amazon_input_data/distance_map/train_distance_map.tif"
+    check_folder(os.path.dirname(train_output_path))
+    
     generate_distance_map(train_input_path, train_output_path)
     
     print_sucess("Distance map generated successfully")

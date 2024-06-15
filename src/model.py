@@ -298,7 +298,8 @@ def train(train_loader:torch.utils.data.DataLoader,
           epoch:int, 
           lr_schedule:np.ndarray, 
           lambda_weight:float, 
-          figures_path:str):
+          figures_path:str=None,
+          batch_norm_layer:bool = False):
     """Train model for one epoch
 
     Parameters
@@ -326,6 +327,8 @@ def train(train_loader:torch.utils.data.DataLoader,
     DEVICE = get_device()
 
     model.train()
+    model.to(DEVICE)
+    
     loss_avg = AverageMeter()
     
     # define functions
@@ -398,7 +401,7 @@ def train(train_loader:torch.utils.data.DataLoader,
             )
             logger.info(f"Accuracy:{summary_batch['Accuracy']}, avgF1:{summary_batch['avgF1']}")
             
-        if it == 0:
+        if it == 0 and figures_path is not None:
             # plot samples results for visual inspection
             with torch.no_grad():
                 plot_figures(inp_img, 

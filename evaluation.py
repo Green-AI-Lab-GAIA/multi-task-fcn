@@ -81,8 +81,7 @@ def define_test_loader(ortho_image:str, size_crops:int, overlap_rate:float)->Tup
 
 def predict_network(ortho_image_shape:Tuple, 
                     dataloader:torch.utils.data.DataLoader, 
-                    model:nn.Module, 
-                    batch_size:int,
+                    model:nn.Module,
                     num_classes:int):
     """
     It runs the inference of the entire image map.\\
@@ -96,8 +95,6 @@ def predict_network(ortho_image_shape:Tuple,
         Torch dataloader with all the patches from the image to be evaluated
     model : nn.Module
         The model with the weight of the current iteration
-    batch_size : int
-        The batch size at each prediction
     num_classes : int
         The number of classes in the segmentation
 
@@ -235,7 +232,6 @@ def evaluate_overlap(prediction_path:float,
         ortho_image_shape = ortho_image_shape,
         dataloader = test_loader,
         model = model,
-        batch_size = args.batch_size,
         num_classes = args.nb_class
     )
 
