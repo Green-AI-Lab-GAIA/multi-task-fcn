@@ -82,7 +82,8 @@ def generate_distance_map(input_image_path:str, output_image_path:str, sigma:int
     input_img = read_tiff(input_image_path).astype('uint16')
     
     output_img = apply_gaussian_distance_map(input_img, sigma)
-
+    
+    output_img[output_img<0.05] = 0
     
     array2raster(output_image_path, output_img, img_metadata, "float32")
 
