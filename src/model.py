@@ -298,8 +298,7 @@ def train(train_loader:torch.utils.data.DataLoader,
           epoch:int, 
           lr_schedule:np.ndarray, 
           lambda_weight:float, 
-          figures_path:str,
-          batch_norm_layer:bool = False):
+          figures_path:str):
     """Train model for one epoch
 
     Parameters
@@ -318,8 +317,6 @@ def train(train_loader:torch.utils.data.DataLoader,
         Weight for the auxiliary task
     figures_path : str
         Path to save sample figures 
-    batch_norm_layer : bool, optional
-        If True, apply batch normalization to the input image, by default False
 
     Returns
     -------
@@ -352,8 +349,6 @@ def train(train_loader:torch.utils.data.DataLoader,
         depth = depth.to(DEVICE, non_blocking=True)
         ref = ref.to(DEVICE, non_blocking=True)
 
-        if batch_norm_layer:
-            inp_img = F.batch_norm(inp_img, inp_img.mean(axis=(0,2,3)), torch.var(inp_img, axis=(0,2,3)))
 
         # create mask for the unknown pixels
         mask = torch.where(ref == 0, torch.tensor(0.0), torch.tensor(1.0))

@@ -13,6 +13,7 @@ import torch.nn.parallel
 import torch.optim
 from tqdm import tqdm
 
+from src.deepvlab3 import DeepLabv3
 from src.logger import create_logger
 from src.model import build_model, load_weights
 from src.dataset import DatasetFromCoord, DatasetForInference
@@ -210,13 +211,14 @@ def evaluate_overlap(prediction_path:float,
 
     logger.info("Building data done with {} patches loaded.".format(test_dataset.coords.shape[0]))
     
-    model = build_model(
-        ortho_image_shape,
-        args.nb_class,
-        args.arch, 
-        args.is_pretrained,
-        psize = args.size_crops,
-        dropout_rate = args.dropout_rate
+        
+    model = DeepLabv3(
+        in_channels = ortho_image_shape,
+        num_classes = args.nb_class, 
+        pretrained = args.is_pretrained, 
+        dropout_rate = args.dropout_rate,
+        batch_norm = args.batch_norm,
+        downsampling_factor = args.downsampling_factor,
     )
 
 

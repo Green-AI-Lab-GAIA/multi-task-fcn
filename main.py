@@ -16,7 +16,7 @@ import torch.nn.parallel
 import torch.optim
 from tqdm import tqdm
 
-from scipy.ndimage import label
+from skimage.measure import label
 
 from evaluation import evaluate_iteration
 from generate_distance_map import generate_distance_map
@@ -35,6 +35,7 @@ from src.model import (build_model, define_loader, eval, load_weights,
 from src.utils import (check_folder, fix_random_seeds, get_device, oversamp,
                        print_sucess, restart_from_checkpoint,
                        restore_checkpoint_variables)
+from src.deepvlab3 import DeepLabv3
 from visualization import generate_labels_view
 import wandb
 gc.set_threshold(0)
@@ -489,15 +490,14 @@ def train_iteration(current_iter_folder:str, args:dict):
 
     orthoimage_meta = get_image_metadata(args.ortho_image)
 
-    model  = build_model(
-        (orthoimage_meta["count"], orthoimage_meta["height"], orthoimage_meta["width"]),
-        args.nb_class,  
-        args.arch, 
-        args.is_pretrained,
-        psize = args.size_crops,
-        dropout_rate = args.dropout_rate
+    model = DeepLabv3(
+        in_channels = orthoimage_meta["count"],
+        num_classes = args.nb_class, 
+        pretrained = args.is_pretrained, 
+        dropout_rate = args.dropout_rate,
+        batch_norm = args.batch_norm,
+        downsampling_factor = args.downsampling_factor,
     )
-
 
     logger.info("Building model done.")
 
