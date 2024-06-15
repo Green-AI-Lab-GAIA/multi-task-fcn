@@ -113,6 +113,9 @@ def train_epochs(config):
     )
     
     ######## TRAIN MODEL #########
+    folder_to_save_model = join(dirname(__file__), "results", f"model_{current_time_seconds}")
+    check_folder(folder_to_save_model)
+               
     logger.info("Start training")
     cudnn.benchmark = True
     count_early = 0
@@ -143,8 +146,9 @@ def train_epochs(config):
         wandb.log({"f1_train_score": f1_avg})
         
         if (f1_avg - best_val) > 0.0009: 
-            
+            logger.info(f"Save model with f1 score: {f1_avg}")
             best_val = f1_avg
+            torch.save(model.state_dict(), join(folder_to_save_model, "model.pth"))
             count_early = 0
 
         else:
@@ -153,6 +157,9 @@ def train_epochs(config):
     # free up cuda memory
     cudnn.benchmark = False
     torch.cuda.empty_cache()
+    
+    # load best model
+    model.load_state_dict(torch.load(join(folder_to_save_model, "model.pth")))
     
     ######### INFERENCE ##########
     logger.info("Start inference")
@@ -197,14 +204,7 @@ def train_epochs(config):
     torch.save(model.state_dict(), 
                join(wandb.run.dir, "model.pth"))
     
-    folder_to_save = join(dirname(__file__), "results", f"model_{current_time_seconds}")
-    check_folder(folder_to_save)
-    
-    torch.save(model.state_dict(), 
-               join(folder_to_save, "model.pth"))
-    
-    save_yaml(dict(config), join(folder_to_save, "config.yaml"))
-               
+    save_yaml(dict(config), join(folder_to_save_model, "config.yaml"))
     # free up cuda memory
     cudnn.benchmark = False
     torch.cuda.empty_cache()
@@ -246,7 +246,7 @@ if __name__ == "__main__":
     SWEEP_FILE = "tune_parameters.yaml"
     sweep_config = read_yaml(SWEEP_FILE)
     
-    # SWEEP_ID = wandb.sweep(sweep_config, project="test_tune")
+    # SWEEP_ID = wandb.sweep(sweep_config, project="tune_parameters")
     # print(SWEEP_ID)
-    SWEEP_ID = "3d7jz2jw"
-    wandb.agent(SWEEP_ID, function=tune, count=50, project="test_tune")
+    SWEEP_ID = "7942o9ns"
+    wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
