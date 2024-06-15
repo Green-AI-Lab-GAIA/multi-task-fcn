@@ -56,7 +56,7 @@ class DatasetFromCoord(Dataset):
         
         coords_label = self.img_segmentation[np.nonzero(self.img_segmentation)]
 
-        coords = oversample(coords, coords_label, "median")   
+        coords = oversample(coords, coords_label, "min")   
 
         self.coords = np.array(coords)
 
