@@ -248,5 +248,5 @@ if __name__ == "__main__":
     
     # SWEEP_ID = wandb.sweep(sweep_config, project="tune_parameters")
     # print(SWEEP_ID)
-    SWEEP_ID = "7942o9ns"
+    SWEEP_ID = "iw33ssxx"
     wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
