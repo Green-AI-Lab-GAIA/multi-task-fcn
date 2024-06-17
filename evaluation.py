@@ -273,8 +273,6 @@ def evaluate_iteration(current_iter_folder:str, args:dict):
         Dictionary of arguments.
     """
 
-    logger.info("============ Initialized Evaluation ============")
-
     ortho_image_metadata = get_image_metadata(args.ortho_image)
     
     ortho_image_shape = (ortho_image_metadata["count"], ortho_image_metadata["height"], ortho_image_metadata["width"])
@@ -287,7 +285,8 @@ def evaluate_iteration(current_iter_folder:str, args:dict):
     if exists(raster_depth) and exists(raster_class_pred) and exists(raster_prob):
         return
     
-
+    logger.info("============ Initialized Evaluation ============")
+    
     for overlap in args.overlap:
         
         prediction_path = join(current_iter_folder, f'prediction_{overlap}.npz')
