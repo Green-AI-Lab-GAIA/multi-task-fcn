@@ -268,7 +268,8 @@ def array2raster(path_to_save:str, array:np.ndarray, image_metadata:dict, dtype:
         crs = image_metadata['crs'],
         transform = image_metadata['transform'],
         compress="packbits",
-        num_threads='all_cpus'
+        num_threads='all_cpus',
+        bigtiff=True
     ) as writer:
         
         if BAND_NUM > 1:
