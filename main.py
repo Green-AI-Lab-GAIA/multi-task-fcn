@@ -442,7 +442,17 @@ def train_iteration(current_iter_folder:str, args:dict):
 
     segmentation_path = get_last_segmentation_path(args.train_segmentation_path, current_iter_folder)
     distance_map_path = get_last_distance_map_path(current_iter_folder)
-            
+    
+    if args.validation_set == "train":
+        val_segmentation_path = segmentation_path
+        val_distance_map_path = distance_map_path
+    
+    elif args.validation_set == "test":
+        val_segmentation_path = args.test_segmentation_path
+        val_distance_map_path = join(args.data_path, f"iter_000", "distance_map", "test_distance_map.tif")
+    
+    else:
+        raise ValueError("validation_set must be 'train' or 'test'")
 
     train_dataset = DatasetFromCoord(
         image_path=args.ortho_image,
@@ -469,8 +479,8 @@ def train_iteration(current_iter_folder:str, args:dict):
     # LOAD VALIDATION SET
     val_dataset = DatasetFromCoord(
         image_path=args.ortho_image,
-        segmentation_path=segmentation_path,
-        distance_map_path=distance_map_path,
+        segmentation_path=val_segmentation_path,
+        distance_map_path=val_distance_map_path,
         samples=args.samples//3,
         augment=args.augment,
         crop_size=args.size_crops,
