@@ -298,8 +298,7 @@ def train(train_loader:torch.utils.data.DataLoader,
           epoch:int, 
           lr_schedule:np.ndarray, 
           lambda_weight:float, 
-          figures_path:str=None,
-          batch_norm_layer:bool = False):
+          figures_path:str=None):
     """Train model for one epoch
 
     Parameters
