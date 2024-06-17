@@ -753,8 +753,6 @@ def compile_component_metrics(current_iter_folder, args):
     
     all_labels_metrics = {f"all_labels_{key}": value for key, value in all_labels_metrics.items()}.copy()
     
-    wandb.log(all_labels_metrics)
-    
     all_labels_stats = get_components_stats(label(all_labels), all_labels)
     num_trees_by_class = all_labels_stats.groupby("tree_type").nunique()
     
