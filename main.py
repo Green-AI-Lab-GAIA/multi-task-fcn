@@ -710,7 +710,14 @@ def generate_distance_map_for_next_iteration(current_iter_folder):
 
 
 def compile_metrics(current_iter_folder, args):
+    
+    METRICS_TEST_PATH = join(current_iter_folder, "test_metrics.yaml")
+    METRICS_TRAIN_PATH = join(current_iter_folder, "train_metrics.yaml")
+    
+    if exists(METRICS_TEST_PATH) and exists(METRICS_TRAIN_PATH):
+        return
 
+    logger.info("============ Compiling Metrics ============")
     GROUND_TRUTH_TEST_PATH = args.test_segmentation_path
     ground_truth_test = read_tiff(GROUND_TRUTH_TEST_PATH)
 
@@ -726,7 +733,7 @@ def compile_metrics(current_iter_folder, args):
     
     wandb.log(metrics_test)
     
-    save_yaml(metrics_test, join(current_iter_folder,'test_metrics.yaml'))    
+    save_yaml(metrics_test, METRICS_TEST_PATH) 
 
     
     ### Save train metrics ###
@@ -735,7 +742,7 @@ def compile_metrics(current_iter_folder, args):
     
     wandb.log(metrics_train)
     
-    save_yaml(metrics_train, join(current_iter_folder,'train_metrics.yaml'))
+    save_yaml(metrics_train, METRICS_TRAIN_PATH)
 
  
 
@@ -746,6 +753,11 @@ def compile_component_metrics(current_iter_folder, args):
     
     ### Save test component metrics ###
     HIGH_PROB_COMPONENTS_PATH = join(current_iter_folder,'all_labels_test_metrics.yaml')
+    
+    if exists(HIGH_PROB_COMPONENTS_PATH):
+        return
+    
+    logger.info("============ Compiling Component Metrics ============")
     
     all_labels = read_tiff(join(current_iter_folder, "new_labels", "all_labels_set.tif"))
 

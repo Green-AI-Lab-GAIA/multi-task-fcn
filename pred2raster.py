@@ -40,7 +40,7 @@ def compute_mean_prediction(data_source:str, overlaps:List[float], current_iter_
 
     
 def pred2raster(current_iter_folder, args):
-    
+
     output_folder = join(current_iter_folder, 'raster_prediction')
     check_folder(output_folder)
 
@@ -54,7 +54,7 @@ def pred2raster(current_iter_folder, args):
     if (isfile(prediction_file) and isfile(prob_file) and isfile(depth_file)):
         return
     
-
+    logger.info("============ Started pred2raster ============")
     logger.info(f"Computing the mean between the {len(args.overlap)} slices")
     
     RASTER_PATH = args.train_segmentation_path
