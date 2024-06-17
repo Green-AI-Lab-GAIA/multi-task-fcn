@@ -15,6 +15,8 @@ train_segmentation_path: "amazon_input_data/segmentation/train_set.tif"
 test_segmentation_path: "amazon_input_data/segmentation/test_set.tif"
 mask_path: "amazon_input_data/mask.tif"
 
+# You can use the 'test' set or the 'train' set as validation set
+validation_set: "test"
 
 ################################# 
 ###### TRAINING parameters ######
