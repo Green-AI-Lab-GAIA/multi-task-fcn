@@ -450,8 +450,12 @@ def train_iteration(current_iter_folder:str, args:dict):
         val_segmentation_path = args.test_segmentation_path
         val_distance_map_path = join(args.data_path, f"iter_000", "distance_map", "test_distance_map.tif")
     
+    elif args.validation_set == "full":
+        val_segmentation_path = args.full_segmentation_path
+        val_distance_map_path = join(args.data_path, f"iter_000", "distance_map", "full_distance_map.tif")
+        
     else:
-        raise ValueError("validation_set must be 'train' or 'test'")
+        raise ValueError("validation_set must be 'train', 'test' or 'full'")
 
     train_dataset = DatasetFromCoord(
         image_path=args.ortho_image,
@@ -678,7 +682,42 @@ def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
 
     array2raster(SELECTED_LABELS_OUTPUT_PATH, selected_labels_set, image_metadata, "Byte")
     
+def generate_distance_map_for_first_iteration(current_iter_folder:str):
+    
+    logger.info(f"============ Generating Distance Map ============")
 
+    TEST_SEGMENTATION_PATH = args.test_segmentation_path
+    TEST_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "test_distance_map.tif")
+    check_folder(dirname(TEST_DISTANCE_MAP_OUTPUT))
+
+    logger.info(f"Generating train distance map")
+    TRAIN_SEGMENTATION_PATH  = args.train_segmentation_path
+    TRAIN_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "train_distance_map.tif")
+    check_folder(dirname(TRAIN_DISTANCE_MAP_OUTPUT))
+    
+    FULL_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "full_distance_map.tif")
+
+    # Create processes for test and train distance map generation
+    test_process = Process(target=generate_distance_map, args=(TEST_SEGMENTATION_PATH, TEST_DISTANCE_MAP_OUTPUT, args.sigma))
+    train_process = Process(target=generate_distance_map, args=(TRAIN_SEGMENTATION_PATH, TRAIN_DISTANCE_MAP_OUTPUT, args.sigma))
+    
+    # Start the processes
+    test_process.start()
+    train_process.start()
+    
+    # Wait for both processes to finish
+    test_process.join()
+    train_process.join()
+
+    test_distance_map = read_tiff(TEST_DISTANCE_MAP_OUTPUT)
+    train_distance_map = read_tiff(TRAIN_DISTANCE_MAP_OUTPUT)
+    
+    train_metadata = get_image_metadata(TRAIN_SEGMENTATION_PATH)
+
+    full_distance_map = np.maximum(test_distance_map, train_distance_map)
+    array2raster(FULL_DISTANCE_MAP_OUTPUT, full_distance_map, train_metadata, "float32")
+
+            
 
 def generate_distance_map_for_next_iteration(current_iter_folder):
 
@@ -829,35 +868,12 @@ if __name__ == "__main__":
         
         # if the iteration 0 applies distance map to ground truth segmentation
         if current_iter == 0:
-            logger.info(f"Generating test distance map")
-
-            TEST_SEGMENTATION_PATH = args.test_segmentation_path
-            TEST_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "test_distance_map.tif")
-            check_folder(dirname(TEST_DISTANCE_MAP_OUTPUT))
-
-            logger.info(f"Generating train distance map")
-            TRAIN_SEGMENTATION_PATH  = args.train_segmentation_path
-            TRAIN_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "train_distance_map.tif")
-            check_folder(dirname(TRAIN_DISTANCE_MAP_OUTPUT))
-
-            # Create processes for test and train distance map generation
-            test_process = Process(target=generate_distance_map, args=(TEST_SEGMENTATION_PATH, TEST_DISTANCE_MAP_OUTPUT, args.sigma))
-            train_process = Process(target=generate_distance_map, args=(TRAIN_SEGMENTATION_PATH, TRAIN_DISTANCE_MAP_OUTPUT, args.sigma))
+            generate_distance_map_for_first_iteration(current_iter_folder)
             
-            # Start the processes
-            test_process.start()
-            train_process.start()
-            
-            # Wait for both processes to finish
-            test_process.join()
-            train_process.join()
-
-            logger.info("Both test and train distance maps have been generated in parallel using multiprocessing.")
-
             logger.info("Generating labels view for iter 0")
 
             generate_labels_view(current_iter_folder, args.ortho_image, args.train_segmentation_path)
-            
+    
             logger.info("Done!")
             continue
         
