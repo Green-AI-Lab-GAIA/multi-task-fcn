@@ -255,13 +255,8 @@ def load_weights(model: nn.Module, checkpoint_file_path:str)-> nn.Module:
 
 
 
-def categorical_focal_loss(input:torch.Tensor, target:torch.Tensor, gamma = 2) -> torch.Tensor:
+def categorical_focal_loss(input:torch.Tensor, target:torch.Tensor, gamma = 2, weigths:bool=True) -> torch.Tensor:
     """Partial Categorical Focal Loss Implementation based on the paper 
-    "Multi-task fully convolutional network for tree species
-    mapping in dense forests using small training
-    hyperspectral data"
-
-
 
     Parameters
     ----------
@@ -282,12 +277,25 @@ def categorical_focal_loss(input:torch.Tensor, target:torch.Tensor, gamma = 2) -
 
     prob = F.softmax(input, dim = 1)
     log_prob = F.log_softmax(input, dim = 1)
+    focal_loss = ((1 - prob) ** gamma) * log_prob
+    if not weigths:
+        return F.nll_loss(focal_loss, target=target, reduction = "none")
+    
+    else:
+        num_classes = input.shape[1]
+        class_freq = torch.bincount(target.flatten())
+        # avoid division by zero
+        class_freq[class_freq == 0] = 1
+        class_weights = 1/class_freq
+        class_weights =  class_weights/class_weights.sum()
+        
+        # Create weight tensor based on target
+        weights_tensor = class_weights[target]
 
-    return F.nll_loss(
-        ((1 - prob) ** gamma) * log_prob, 
-        target=target,
-        reduction = "none"
-    )
+        weighted_focal_loss = focal_loss * weights_tensor
+        
+        return F.nll_loss(weighted_focal_loss, target=target, reduction = "none")
+        
 
 
 
@@ -296,7 +304,8 @@ def train(train_loader:torch.utils.data.DataLoader,
           model:nn.Module, 
           optimizer:torch.optim.Optimizer, 
           epoch:int, 
-          lr_schedule:np.ndarray, 
+          lr_schedule:np.ndarray,
+          weigthed_loss:bool,
           lambda_weight:float, 
           figures_path:str=None):
     """Train model for one epoch
@@ -362,7 +371,7 @@ def train(train_loader:torch.utils.data.DataLoader,
         # Foward Passs
         out_batch = model(inp_img)
         
-        loss1 = mask*categorical_focal_loss(out_batch["out"], ref_copy)
+        loss1 = mask*categorical_focal_loss(out_batch["out"], ref_copy, weigths=weigthed_loss)
 
         loss2 = mask*aux_criterion(sig(out_batch['aux'])[:,0,:,:], depth)
         
