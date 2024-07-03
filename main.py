@@ -4,7 +4,7 @@ import math
 import os
 import shutil
 from multiprocessing import Process
-from os.path import dirname, exists, isfile, join
+from os.path import dirname, exists, isfile, join, abspath
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -131,7 +131,7 @@ def get_current_iter_folder(data_path, overlap):
 
             return next_iter_path
     
-    if is_iter_0_done(args.data_path):
+    if is_iter_0_done(data_path):
         return join(data_path, f"iter_{1:03d}")
 
 
@@ -291,6 +291,7 @@ def train_epochs(last_checkpoint:str,
                  count_early:int,
                  val_loader:torch.utils.data.DataLoader,
                  current_iter_folder:str,
+                 lambda_weight:float,
                  patience:int=5,
                  ):
     """Train the model with the specified epochs numbers
@@ -321,8 +322,9 @@ def train_epochs(last_checkpoint:str,
         The limit of the count early variable, by default 5
     """
     current_iter = int(current_iter_folder.split("iter_")[-1])
-
-    training_stats = ParquetUpdater(join(args.data_path, "training_stats.parquet"))
+    data_path = abspath(dirname(current_iter_folder))
+    
+    training_stats = ParquetUpdater(join(data_path, "training_stats.parquet"))
 
     # Create figures folder to save training figures every epochsaved.
     figures_path = join(dirname(last_checkpoint), 'figures')
@@ -349,7 +351,7 @@ def train_epochs(last_checkpoint:str,
                                  epoch=epoch, 
                                  lr_schedule=lr_schedule, 
                                  figures_path=figures_path, 
-                                 lambda_weight=args.lambda_weight)
+                                 lambda_weight=lambda_weight)
         
         logger.info("Evaluating the model...")
         f1_avg, f1_by_class_avg = eval(val_loader, model)
@@ -586,7 +588,8 @@ def train_iteration(current_iter_folder:str, args:dict):
                      lr_schedule, 
                      to_restore["count_early"],
                      val_loader = val_loader,
-                     current_iter_folder = current_iter_folder)
+                     current_iter_folder = current_iter_folder,
+                     lambda_weight=args.lambda_weight)
     gc.collect()
 
 
@@ -668,7 +671,8 @@ def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
         new_depth_map = new_depth_map,
         prob_thr = args.prob_thr,
         depth_thr = args.depth_thr,
-        sigma=args.sigma
+        sigma=args.sigma,
+        args=args
     )
 
     ##### SAVE NEW LABELS ####
@@ -683,7 +687,7 @@ def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
 
     array2raster(SELECTED_LABELS_OUTPUT_PATH, selected_labels_set, image_metadata, "Byte")
     
-def generate_distance_map_for_first_iteration(current_iter_folder:str):
+def generate_distance_map_for_first_iteration(current_iter_folder:str, args:dict):
     
     logger.info(f"============ Generating Distance Map ============")
 
@@ -720,7 +724,7 @@ def generate_distance_map_for_first_iteration(current_iter_folder:str):
 
             
 
-def generate_distance_map_for_next_iteration(current_iter_folder):
+def generate_distance_map_for_next_iteration(current_iter_folder, args:dict):
 
     ALL_LABELS_PATH = join(current_iter_folder, "new_labels", f'all_labels_set.tif')
     SELECTED_LABELS_PATH = join(current_iter_folder, "new_labels", f'selected_labels_set.tif')
@@ -869,7 +873,7 @@ if __name__ == "__main__":
         
         # if the iteration 0 applies distance map to ground truth segmentation
         if current_iter == 0:
-            generate_distance_map_for_first_iteration(current_iter_folder)
+            generate_distance_map_for_first_iteration(current_iter_folder, args)
             
             logger.info("Generating labels view for iter 0")
 
@@ -897,7 +901,7 @@ if __name__ == "__main__":
         
         compile_component_metrics(current_iter_folder, args)
         
-        generate_distance_map_for_next_iteration(current_iter_folder)
+        generate_distance_map_for_next_iteration(current_iter_folder, args)
 
         #############################################
 
@@ -908,4 +912,6 @@ if __name__ == "__main__":
         print_sucess("Distance map generated")
  
 
-
+if __name__ != "__main__":
+    from logging import getLogger
+    logger = getLogger("__main__")

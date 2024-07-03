@@ -167,7 +167,9 @@ def evaluate_overlap(prediction_path:float,
                      overlap:float,
                      current_iter_folder:str,
                      ortho_image_shape:tuple,
-                     save_compressed:bool = True
+                     args,
+                     save_compressed:bool = True,
+                     
 ):
     """This function runs an evaluation on the entire image.\\
     The image is divided into patches, that will be the inputs of the model.\\
@@ -305,6 +307,7 @@ def evaluate_iteration(current_iter_folder:str, args:dict):
             overlap, 
             current_iter_folder, 
             ortho_image_shape,
+            args=args,
             save_compressed=False)
         
         logger.info(f"Overlap {overlap} done.")

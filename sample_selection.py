@@ -302,18 +302,18 @@ def select_n_labels_by_class(pred_labels:np.ndarray, samples_by_class:int = 5):
 
 
 
-def filter_components_by_mask(pred_map:np.ndarray):
+def filter_components_by_mask(pred_map:np.ndarray, mask_path:str):
     """Remove labels and components out of the mask.tif area
 
     Parameters
     ----------
-    data_path : str
-        Path to the data folder
     pred_map : np.ndarray
         The labels map from the current iteration.
+    mask_path : str
+        The path to the mask.tif file
     """
     
-    mask = read_tiff(args["mask_path"])
+    mask = read_tiff(mask_path)
     
     if not mask.dtype == "bool":
         mask = np.where(mask > 0, False, True)
@@ -441,7 +441,8 @@ def filter_map_by_depth_prob(pred_map:np.ndarray, prob_map:np.ndarray, depth_map
 
 
 def select_good_samples(old_pred_map:np.ndarray,
-                        new_pred_map:np.ndarray
+                        new_pred_map:np.ndarray,
+                        args:dict
                         ) -> np.ndarray:
     """
     Selects high-quality samples based on model outputs.
@@ -471,7 +472,7 @@ def select_good_samples(old_pred_map:np.ndarray,
                                             high_limit = np.float32(args.upper_limit_area), # high limit area
                                             property = "area")
     
-    filter_components_by_mask(new_pred_map)
+    filter_components_by_mask(new_pred_map, mask_path=args.mask_path)
     
     # Calculate main metrics of each tree
     comp_old_pred = label(old_pred_map)
@@ -525,6 +526,7 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
                                 new_depth_map:np.ndarray, 
                                 prob_thr:float,
                                 depth_thr:float,
+                                args:dict,
                                 sigma:float=9)->Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ Get the new segmentation sample based on the segmentation from the last iteration and the new segmentation prediction set
     
@@ -563,6 +565,7 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
     new_pred_map = select_good_samples(
         old_all_labels,
         new_pred_map,
+        args=args
     )
     new_pred_map = convert_to_minor_numeric_type(new_pred_map)
     
