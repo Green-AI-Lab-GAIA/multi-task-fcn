@@ -667,7 +667,8 @@ def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
         new_prob_map = new_prob_map, 
         new_depth_map = new_depth_map,
         prob_thr = args.prob_thr,
-        depth_thr = args.depth_thr
+        depth_thr = args.depth_thr,
+        sigma=args.sigma
     )
 
     ##### SAVE NEW LABELS ####
