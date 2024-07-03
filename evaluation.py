@@ -24,7 +24,6 @@ from src.io_operations import get_image_metadata, load_norm, read_yaml,  convert
 
 
 ROOT_PATH = os.path.dirname(__file__)
-args = read_yaml(join(ROOT_PATH, "args.yaml"))
 
 logger = getLogger("__main__")
         
