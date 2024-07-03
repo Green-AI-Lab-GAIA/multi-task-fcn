@@ -34,7 +34,7 @@ from src.model import (build_model, define_loader, eval, load_weights,
                        save_checkpoint, train)
 from src.utils import (check_folder, fix_random_seeds, get_device, oversamp,
                        print_sucess, restart_from_checkpoint,
-                       restore_checkpoint_variables)
+                       restore_checkpoint_variables, from_255_to_1)
 from src.deepvlab3 import DeepLabv3
 from visualization import generate_labels_view
 import wandb
@@ -642,9 +642,12 @@ def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
 
     NEW_PROB_FILE = join(current_iter_folder, "raster_prediction", f'join_prob_{np.sum(args.overlap)}.TIF')
     new_prob_map = read_tiff(NEW_PROB_FILE)
+    new_prob_map = from_255_to_1(new_prob_map)
 
     NEW_DEPTH_FILE = join(current_iter_folder, "raster_prediction", f'depth_{np.sum(args.overlap)}.TIF')
     new_depth_map = read_tiff(NEW_DEPTH_FILE)
+    new_depth_map = from_255_to_1(new_depth_map)
+    
 
 
     if current_iter == 1:
