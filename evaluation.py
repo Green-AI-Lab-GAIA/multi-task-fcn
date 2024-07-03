@@ -24,7 +24,6 @@ from src.io_operations import get_image_metadata, load_norm, read_yaml,  convert
 
 
 ROOT_PATH = os.path.dirname(__file__)
-args = read_yaml(join(ROOT_PATH, "args.yaml"))
 
 logger = getLogger("__main__")
         
@@ -167,7 +166,9 @@ def evaluate_overlap(prediction_path:float,
                      overlap:float,
                      current_iter_folder:str,
                      ortho_image_shape:tuple,
-                     save_compressed:bool = True
+                     args,
+                     save_compressed:bool = True,
+                     
 ):
     """This function runs an evaluation on the entire image.\\
     The image is divided into patches, that will be the inputs of the model.\\
@@ -235,6 +236,11 @@ def evaluate_overlap(prediction_path:float,
         num_classes = args.nb_class
     )
 
+    logger.info("Converting predictions to uint8 type to save memory...")
+    logger.info("Instead of prob and depth between 0 to 1, it will be between 0 to 255")
+    prob_map = np.ceil((prob_map*255)).astype("uint8")
+    depth_map = np.ceil((depth_map*255)).astype("uint8")
+    
     gc.collect()
     
     logger.info(f"Saving prediction outputs..")
@@ -305,6 +311,7 @@ def evaluate_iteration(current_iter_folder:str, args:dict):
             overlap, 
             current_iter_folder, 
             ortho_image_shape,
+            args=args,
             save_compressed=False)
         
         logger.info(f"Overlap {overlap} done.")

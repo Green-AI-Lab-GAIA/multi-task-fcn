@@ -4,7 +4,7 @@ from logging import getLogger
 from typing import List
 import numpy as np
 
-from src.utils import check_folder
+from src.utils import check_folder, convert_to_minor_numeric_type
 from src.io_operations import array2raster, get_image_metadata, read_yaml
 
 logger = getLogger("__main__")
@@ -26,15 +26,22 @@ def compute_mean_prediction(data_source:str, overlaps:List[float], current_iter_
         prediction_ov_data = np.load(prediction_overlap_path)
         
         if num == 0:
-            prediction_test = prediction_ov_data[data_source]
+            prediction_test = np.float32(prediction_ov_data[data_source])
             continue
 
         else:
-            prediction_test = np.add(prediction_test, prediction_ov_data[data_source])
+            prediction_test = np.add(prediction_test, np.float32(prediction_ov_data[data_source]))
         
         prediction_ov_data.close()
 
-    return prediction_test/len(overlaps)
+    mean_prediction = prediction_test/len(overlaps)
+    
+    if np.max(mean_prediction) > 2:
+        mean_prediction = np.ceil(mean_prediction)
+        mean_prediction = np.uint8(mean_prediction)
+    
+    return mean_prediction
+    
         
   
 
@@ -65,7 +72,7 @@ def pred2raster(current_iter_folder, args):
 
     logger.info("Saving prob_map and class_map to raster files")
     array2raster(prediction_file, np.argmax(prob_map_mean, axis = -1), image_metadata, "uint8")
-    array2raster(prob_file, np.amax(prob_map_mean, axis = -1), image_metadata, "float32")
+    array2raster(prob_file, np.amax(prob_map_mean, axis = -1), image_metadata, "uint8")
     del prob_map_mean
 
 
@@ -73,7 +80,7 @@ def pred2raster(current_iter_folder, args):
     depth_map_mean = compute_mean_prediction("depth_map", args.overlap, current_iter_folder)
     
     logger.info("Saving prob_map and class_map to raster files")
-    array2raster(depth_file, depth_map_mean, image_metadata, "float32")
+    array2raster(depth_file, depth_map_mean, image_metadata, "uint8")
     del depth_map_mean
 
     delete_prediction_files(current_iter_folder, args.overlap)

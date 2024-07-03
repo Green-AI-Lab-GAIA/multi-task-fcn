@@ -51,6 +51,44 @@ def run_in_thread(func):
 
     return wrapper
 
+def from_255_to_1(image:np.ndarray)->np.ndarray:
+    """Convert image values from 0-255 to 0-1
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Image array to convert
+        Shape: (BANDS, ROW, COL)
+
+    Returns
+    -------
+    np.ndarray
+        Image array with values from 0-1
+    """
+    if image.max() <= 1:
+        return image
+    else:
+        return np.float32(image)/255
+
+
+def from_1_to_255(image:np.ndarray)->np.ndarray:
+    """Convert image values from 0-1 to 0-255
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Image array to convert
+        Shape: (BANDS, ROW, COL)
+
+    Returns
+    -------
+    np.ndarray
+        Image array with values from 0-255
+    """
+    if image.max() <= 1:
+        return np.uint8(np.ceil(image*255))
+    else:
+        return image
 
 
 def run_in_process(func):
