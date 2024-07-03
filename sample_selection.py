@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter
 from skimage.measure import label, regionprops_table, regionprops
+from skimage.morphology import remove_small_holes, remove_small_objects
 from shapely.geometry import Polygon
 
 from tqdm import tqdm
@@ -434,7 +435,9 @@ def filter_map_by_depth_prob(pred_map:np.ndarray, prob_map:np.ndarray, depth_map
     prob_gauss = gaussian_filter(prob_map, sigma = 9)
 
     # Selection the image
-    pred_map = np.where((depth_gauss > depth_thr) & (prob_gauss > prob_thr), pred_map, 0)
+    mask = (depth_gauss > depth_thr) & (prob_gauss > prob_thr)
+    
+    pred_map = np.where(mask, pred_map, 0)
 
     return pred_map
 
@@ -464,6 +467,10 @@ def select_good_samples(old_pred_map:np.ndarray,
     """
 
     new_pred_map = new_pred_map.copy()
+    
+    mask = np.where(new_pred_map>0, True, False)
+    mask = remove_small_holes(mask, area_threshold=args.lower_limit_area//5)
+    new_pred_map = np.where(mask, new_pred_map, 0)
     
     # filter components too small or too large
     filter_components_by_geometric_property(new_pred_map, 
