@@ -787,32 +787,35 @@ def compile_metrics(current_iter_folder, args):
 
 def compile_component_metrics(current_iter_folder, args):
     
+    current_iter_num = int(current_iter_folder.split("_")[-1])
     GROUND_TRUTH_TEST_PATH = args.test_segmentation_path
     ground_truth_test = read_tiff(GROUND_TRUTH_TEST_PATH)
     
     ### Save test component metrics ###
-    HIGH_PROB_COMPONENTS_PATH = join(current_iter_folder,'all_labels_test_metrics.yaml')
+    COMPONENTS_PRECISION_METRICS_PATH = join(current_iter_folder,'all_labels_test_metrics.yaml')
+    COMPONENTS_STATS_PATH = join(current_iter_folder, "all_labels_stats.parquet")
     
-    if exists(HIGH_PROB_COMPONENTS_PATH):
+    if exists(COMPONENTS_PRECISION_METRICS_PATH) and exists(COMPONENTS_STATS_PATH):
         return
     
     logger.info("============ Compiling Component Metrics ============")
     
     all_labels = read_tiff(join(current_iter_folder, "new_labels", "all_labels_set.tif"))
 
+    ### EVALUATE COMPONENT PRECISION METRICS ###
     all_labels_metrics = evaluate_component_metrics(ground_truth_test, all_labels, args.nb_class)
     
     all_labels_metrics = {f"all_labels_{key}": value for key, value in all_labels_metrics.items()}.copy()
     
-    all_labels_stats = get_components_stats(label(all_labels), all_labels)
-    num_trees_by_class = all_labels_stats.groupby("tree_type").nunique()
+    ### EVALUATE COMPONENT STATS: AREA, PERIMETER, ETC ###
+    all_labels_stats = get_components_stats(label(all_labels), all_labels).reset_index()
     
-    # create a dict in pair of this data frame
-    num_trees_by_class = num_trees_by_class.to_dict()
+    all_labels_stats["iter"] = f"iter_{current_iter_num:03d}"
+    all_labels_stats["iter_num"] = current_iter_num
     
-    wandb.log(num_trees_by_class)
-    
-    save_yaml(all_labels_metrics, HIGH_PROB_COMPONENTS_PATH)
+    ##### SAVE METRICS ####
+    save_yaml(all_labels_metrics, COMPONENTS_PRECISION_METRICS_PATH)
+    all_labels_stats.to_parquet(COMPONENTS_STATS_PATH)
 
 
 
