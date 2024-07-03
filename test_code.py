@@ -1,12 +1,12 @@
-import os
-from os.path import join, dirname, abspath
 from glob import glob
-from PIL import Image
-from src.io_operations import load_args
-import fnmatch
-from src.io_operations import read_tiff
-from main import *
+from os.path import join
+from pathlib import Path
+
+
 import wandb
+from main import *
+from src.io_operations import load_args, read_tiff
+
 # disable wandb
 wandb.init(mode="disabled", project="test")
 
@@ -22,7 +22,7 @@ args.mask_path = "16x_amazon_input_data/mask.tif"
 
 # change for less epochs and samples
 args.epochs = 3
-args.samples = 5000
+args.samples = 100
 args.batch_size = 32
 args.size_crops = 256
 args.num_iter = 2
@@ -31,13 +31,11 @@ args.num_workers = 0
 
 def get_tiff_file_paths(data_path):
     
-    tiff_files = []
-    extensions = ["*.tif", "*.tiff", "*.TIF", "*.TIFF"]
+    extensions = [".tif", ".tiff", ".TIF", ".TIFF"]
     
-    for root, dirs, files in os.walk(data_path):
-        for ext in extensions:
-            for filename in fnmatch.filter(files, ext):
-                tiff_files.append(join(root, filename))
+    directory = Path(data_path)
+    
+    tiff_files = [str(file) for ext in extensions for file in directory.rglob(f'*{ext}')]
     
     return tiff_files.copy()
         
@@ -135,7 +133,7 @@ if __name__ == "__main__":
 
         print_sucess("Distance map generated")
     
-    convert_every_tiff_to_png(dirname(dirname(args.train_segmentation_path)))
+    convert_every_tiff_to_png(args.data_path)
 
 
 
