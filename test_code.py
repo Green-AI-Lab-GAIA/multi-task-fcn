@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
         print_sucess("Distance map generated")
     
-    convert_every_tiff_to_png(args.data_path)
+        convert_every_tiff_to_png(args.data_path)
 
 
 
