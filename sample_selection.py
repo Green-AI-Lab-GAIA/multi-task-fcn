@@ -402,7 +402,7 @@ def join_labels_set(high_priority_labels:np.ndarray, low_priority_labels:np.ndar
     return labels_union
 
 
-def filter_map_by_depth_prob(pred_map:np.ndarray, prob_map:np.ndarray, depth_map:np.ndarray,  prob_thr:str, depth_thr:float,)->np.ndarray:
+def filter_map_by_depth_prob(pred_map:np.ndarray, prob_map:np.ndarray, depth_map:np.ndarray,  prob_thr:str, depth_thr:float, sigma:float=9)->np.ndarray:
     """
     Filter a prediction map by the probability map.
 
@@ -428,10 +428,10 @@ def filter_map_by_depth_prob(pred_map:np.ndarray, prob_map:np.ndarray, depth_map
     pred_map = pred_map.copy()
     
     # Smothing the contours of depth_map
-    depth_gauss = gaussian_filter(depth_map, sigma = 9)
+    depth_gauss = gaussian_filter(depth_map, sigma = sigma)
 
     # Smothing the contours of prob_map
-    prob_gauss = gaussian_filter(prob_map, sigma = 9)
+    prob_gauss = gaussian_filter(prob_map, sigma = sigma)
 
     # Selection the image
     pred_map = np.where((depth_gauss > depth_thr) & (prob_gauss > prob_thr), pred_map, 0)
@@ -524,7 +524,8 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
                                 new_prob_map:np.ndarray, 
                                 new_depth_map:np.ndarray, 
                                 prob_thr:float,
-                                depth_thr:float)->Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                                depth_thr:float,
+                                sigma:float=9)->Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ Get the new segmentation sample based on the segmentation from the last iteration and the new segmentation prediction set
     
     Parameters
@@ -555,7 +556,8 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
                                             new_prob_map, 
                                             new_depth_map, 
                                             prob_thr,
-                                            depth_thr)
+                                            depth_thr,
+                                            sigma)
     
     logger.info("Selecting the samples with good aspects")
     new_pred_map = select_good_samples(
