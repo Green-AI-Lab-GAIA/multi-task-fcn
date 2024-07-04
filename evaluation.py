@@ -238,8 +238,8 @@ def evaluate_overlap(prediction_path:float,
 
     logger.info("Converting predictions to uint8 type to save memory...")
     logger.info("Instead of prob and depth between 0 to 1, it will be between 0 to 255")
-    prob_map = np.ceil((prob_map*255)).astype("uint8")
-    depth_map = np.ceil((depth_map*255)).astype("uint8")
+    prob_map = (prob_map*255).astype("uint8")
+    depth_map = (depth_map*255).astype("uint8")
     
     gc.collect()
     

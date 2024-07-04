@@ -26,18 +26,17 @@ def compute_mean_prediction(data_source:str, overlaps:List[float], current_iter_
         prediction_ov_data = np.load(prediction_overlap_path)
         
         if num == 0:
-            prediction_test = np.float32(prediction_ov_data[data_source])
+            prediction_test = np.float16(prediction_ov_data[data_source])
             continue
 
         else:
-            prediction_test = np.add(prediction_test, np.float32(prediction_ov_data[data_source]))
+            prediction_test = np.add(prediction_test, np.float16(prediction_ov_data[data_source]))
         
         prediction_ov_data.close()
 
     mean_prediction = prediction_test/len(overlaps)
     
     if np.max(mean_prediction) > 2:
-        mean_prediction = np.ceil(mean_prediction)
         mean_prediction = np.uint8(mean_prediction)
     
     return mean_prediction
