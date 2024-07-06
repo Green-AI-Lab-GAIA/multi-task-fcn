@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torcheval.metrics import MulticlassF1Score
 from tqdm import tqdm
 
 ROOT_PATH = dirname(dirname(__file__))
@@ -439,33 +440,34 @@ def eval(val_loader:torch.utils.data.DataLoader,
 
     DEVICE = get_device()
 
-    f1_avg = AverageMeter()
+    f1_avg = MulticlassF1Score(num_classes=args.nb_class, average="macro", device=DEVICE)
+    f1_by_class_avg = MulticlassF1Score(num_classes=args.nb_class, average=None, device=DEVICE)
     
-    f1_by_class_avg = AverageMeter()
-
     soft = nn.Softmax(dim=1).to(DEVICE)
 
     with torch.no_grad():
 
         for (inp_img, depth, ref) in tqdm(val_loader):
 
-            # ============ forward pass and loss ... ============
-            # compute model loss and output
             inp_img = inp_img.to(DEVICE, non_blocking=True)
-
-            # Foward Passs
+            
             out_batch = model(inp_img)
             
             out_prob = soft(out_batch['out'])
             
-            f1_macro = evaluate_f1(out_prob, ref, average="macro")
-            f1_avg.update(f1_macro)
+            mask = (ref > 0)
             
-            f1_by_class = evaluate_f1(out_prob, ref, average=None)
-            f1_by_class_avg.update(f1_by_class)
+            ref_masked = ref[mask]
+            ref_masked = ref_masked - 1
             
+            pred_class = torch.argmax(out_prob, dim=1)
+            pred_class_masked = pred_class[mask]
+            
+            f1_avg.update(pred_class_masked, ref_masked)
+            f1_by_class_avg.update(pred_class_masked, ref_masked)
+         
 
-    return f1_avg.avg, f1_by_class_avg.avg
+    return f1_avg.compute().cpu().item(), f1_by_class_avg.compute().cpu().numpy()
 
 
 
