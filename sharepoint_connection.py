@@ -1,4 +1,5 @@
 # %%
+from concurrent.futures import ThreadPoolExecutor
 import os
 from io import BytesIO
 from os import path
@@ -230,14 +231,21 @@ class SharePointConnection:
         # upload files
         total_files = sum([len(files) for _, _, files in os.walk(local_folder)])
         pbar = tqdm(total=total_files, desc="Uploading files", disable=not progress_bar)
+        
         for root, dirs, files in os.walk(local_folder):
             for file in files:
+                
                 local_path = path.join(root, file)
                 remote_path = path.join(remote_folder, path.relpath(root, parent_local_folder))
-                # check file size in bytes
+                
                 file_size = path.getsize(local_path)
-                if file_size < 50*(10**6):
+                
+                if file_size < 200*(10**6):
                     self.upload_file(local_path, remote_path)
+                    
+                else:
+                    print(f"File {file} is too large to be uploaded")
+                    
                 pbar.update(1)
         
         pbar.close()
