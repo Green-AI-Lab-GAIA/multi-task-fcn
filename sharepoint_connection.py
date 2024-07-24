@@ -220,9 +220,11 @@ class SharePointConnection:
         
         # create all subfolders in remote_folder
         for root, dirs, files in os.walk(local_folder):
-            for dir in dirs:
-                remote_subfolder = path.relpath(root, parent_local_folder)
-                self.create_remote_folder(remote_subfolder, dir)
+            with ThreadPoolExecutor() as executor:
+                for dir in dirs:
+                    remote_subfolder = path.relpath(root, parent_local_folder)
+                    executor.submit(self.create_remote_folder, remote_subfolder, dir)
+        
         
         
         # upload files
