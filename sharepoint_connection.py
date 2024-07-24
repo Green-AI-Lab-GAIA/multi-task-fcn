@@ -254,7 +254,7 @@ class SharePointConnection:
 
 if __name__ == "__main__":
     # load password
-    password = open("/home/luiz.luz/multi-task-fcn/password.txt", "r").read()
+    password = open("password.txt", "r").read()
     
     sp = SharePointConnection(
         "B41317@fgv.edu.br",
@@ -264,4 +264,4 @@ if __name__ == "__main__":
         sharepoint_doc="Documentos%20Compartilhados",
     )
     
-    sp.upload_folder("/home/luiz.luz/multi-task-fcn/13_amazon_data", "", progress_bar=True)
+    sp.upload_folder("2.8_amazon_data", "", progress_bar=True)
