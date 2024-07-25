@@ -24,6 +24,7 @@ class DatasetFromCoord(Dataset):
                 crop_size:int,
                 samples:int = None,
                 augment:bool = False,
+                copy_paste_augmentation:bool = False
                 ) -> None: 
         
         super().__init__()
@@ -35,6 +36,8 @@ class DatasetFromCoord(Dataset):
         self.samples = samples
         self.crop_size = crop_size
         self.augment = augment
+        
+        self.copy_paste_augmentation = copy_paste_augmentation
         
         self.img_segmentation = load_image(segmentation_path)
         self.img_depth = load_image(distance_map_path)
@@ -53,7 +56,7 @@ class DatasetFromCoord(Dataset):
         
         coords_label = self.img_segmentation[np.nonzero(self.img_segmentation)]
 
-        coords = oversample(coords, coords_label, "median")   
+        coords = oversample(coords, coords_label, "min")   
 
         self.coords = np.array(coords)
 
@@ -87,6 +90,20 @@ class DatasetFromCoord(Dataset):
         return torch.tensor(image_crop)
 
 
+    def copy_and_paste_augmentation(self, image:torch.Tensor, segmentation:torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # random select a crop from the image
+        random_row = np.random.randint(self.crop_size, self.image_shape[1] - self.crop_size)
+        random_column = np.random.randint(self.crop_size, self.image_shape[2] - self.crop_size)
+        
+        image_crop = self.read_window_around_coord(
+            coord=[random_row, random_column],
+            image=self.image,
+        )
+        
+        # paste the crop into the image
+        return torch.where(segmentation > 0, image, image_crop)
+        
+        
     def __getitem__(self, idx) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get the data from the dataset
         
@@ -134,6 +151,9 @@ class DatasetFromCoord(Dataset):
 
 
         if self.augment:
+            if np.random.random() < 0.5 and self.copy_paste_augmentation:
+                image = self.copy_and_paste_augmentation(image, segmentation)
+                    
             # Run Horizontal Flip
             if np.random.random() > 0.5:
                 image = transforms.functional.hflip(image)
@@ -277,44 +297,52 @@ class DatasetForInference(Dataset):
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
+    INPUT_IMAGE = r"4x_amazon_input_data/orthoimage/orthoimage.tif"
     overlap_rates_to_test = [0.1, 0.3, 0.5]
     crop_size_to_test = [128, 256, 512]
-    
-    for overlap_rate in overlap_rates_to_test:
-        for crop_size in crop_size_to_test:
-            
-            inference_dataset = DatasetForInference(
-                image_path = r"amazon_mc_input_data\orthoimage\NOV_2017_FINAL_004.tif",
-                crop_size = crop_size,
-                overlap_rate = overlap_rate
-            )
-            
-            inference_dataset.standardize_image_channels()
-            
-            inference_dataloader = torch.utils.data.DataLoader(
-                inference_dataset,
-                batch_size = 10,
-                shuffle = False,
-                num_workers = 0
-            )
-            
-            # rebuild the own image
-            output_image = np.zeros_like(inference_dataset.image)
-            count_image = np.zeros_like(inference_dataset.image)
-            
-            for i, (image, slice) in enumerate(inference_dataloader):
+    for batch_size in [8,16,32,64]:
+        for overlap_rate in overlap_rates_to_test:
+            for crop_size in crop_size_to_test:
                 
-                row_start, row_end, column_start, column_end = slice
+                inference_dataset = DatasetForInference(
+                    image_path = INPUT_IMAGE,
+                    crop_size = crop_size,
+                    overlap_rate = overlap_rate
+                )
                 
-                for j in range(image.shape[0]):
+                inference_dataset.standardize_image_channels()
+                
+                inference_dataloader = torch.utils.data.DataLoader(
+                    inference_dataset,
+                    batch_size = batch_size,
+                    shuffle = False,
+                    num_workers = 0
+                )
+                
+                # rebuild the own image
+                output_image = np.zeros_like(inference_dataset.image)
+                count_image = np.zeros_like(inference_dataset.image)
+                
+                for i, (image, slice) in enumerate(inference_dataloader):
                     
-                    output_image[:, row_start[j]:row_end[j], column_start[j]:column_end[j]] += image[j].numpy()
-                    count_image[:, row_start[j]:row_end[j], column_start[j]:column_end[j]] += 1
-            
-            
-            count_image = np.where(count_image == 0, 1, count_image)
-            output_image = output_image / count_image
-            
-            plt.imshow(np.moveaxis(output_image, 0,2))
-            plt.savefig(f"test_data/inference_image_{overlap_rate}_{crop_size}.png")
-            plt.close()
+                    row_start, row_end, column_start, column_end = slice
+                    
+                    for j in range(image.shape[0]):
+                        
+                        output_image[:, 
+                            row_start[j]:row_end[j], 
+                            column_start[j]:column_end[j]
+                        ] += image[j].numpy()
+                        
+                        count_image[:, 
+                            row_start[j]:row_end[j], 
+                            column_start[j]:column_end[j]
+                        ] += 1
+                
+                
+                count_image = np.where(count_image == 0, 1, count_image)
+                output_image = output_image / count_image
+                
+                plt.imshow(np.moveaxis(output_image, 0,2))
+                plt.savefig(f"test_data/inference_image_{overlap_rate}_{crop_size}_{batch_size}.png")
+                plt.close()

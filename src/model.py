@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torcheval.metrics import MulticlassF1Score
 from tqdm import tqdm
 
 ROOT_PATH = dirname(dirname(__file__))
@@ -21,7 +22,7 @@ from src.metrics import evaluate_f1, evaluate_metrics
 from src.resnet import ResUnet
 from src.utils import (AverageMeter, check_folder, get_device, plot_figures)
 from src.io_operations import load_norm, read_yaml
-
+import wandb
 args = read_yaml(join(ROOT_PATH, "args.yaml"))
 
 logger = getLogger("__main__")
@@ -75,7 +76,6 @@ def define_loader(orto_img:str, gt_lab:np.ndarray, size_crops:int, test=False) -
 def build_model(image_shape:list, 
                 num_classes:int, 
                 arch:Literal["resunet", "deeplabv3_resnet50", "deeplabv3+", "deeplabv3+_resnet9"], 
-                filters:list, 
                 pretrained:bool, 
                 psize:int,
                 dropout_rate:float)->nn.Module:
@@ -113,7 +113,7 @@ def build_model(image_shape:list,
         model = ResUnet(
             channel=image_shape[0], 
             nb_classes = num_classes, 
-            filters=filters)
+            filters= [32, 32, 32, 32])
 
     # build model
     elif arch == "deeplabv3_resnet50":
@@ -299,8 +299,7 @@ def train(train_loader:torch.utils.data.DataLoader,
           epoch:int, 
           lr_schedule:np.ndarray, 
           lambda_weight:float, 
-          figures_path:str,
-          batch_norm_layer:bool = False):
+          figures_path:str=None):
     """Train model for one epoch
 
     Parameters
@@ -319,8 +318,6 @@ def train(train_loader:torch.utils.data.DataLoader,
         Weight for the auxiliary task
     figures_path : str
         Path to save sample figures 
-    batch_norm_layer : bool, optional
-        If True, apply batch normalization to the input image, by default False
 
     Returns
     -------
@@ -330,6 +327,8 @@ def train(train_loader:torch.utils.data.DataLoader,
     DEVICE = get_device()
 
     model.train()
+    model.to(DEVICE)
+    
     loss_avg = AverageMeter()
     
     # define functions
@@ -353,8 +352,6 @@ def train(train_loader:torch.utils.data.DataLoader,
         depth = depth.to(DEVICE, non_blocking=True)
         ref = ref.to(DEVICE, non_blocking=True)
 
-        if batch_norm_layer:
-            inp_img = F.batch_norm(inp_img, inp_img.mean(axis=(0,2,3)), torch.var(inp_img, axis=(0,2,3)))
 
         # create mask for the unknown pixels
         mask = torch.where(ref == 0, torch.tensor(0.0), torch.tensor(1.0))
@@ -383,6 +380,8 @@ def train(train_loader:torch.utils.data.DataLoader,
         # update the average loss
         loss_avg.update(loss)
 
+        wandb.log({"train/loss": loss})
+        
         gc.collect()
 
         # Evaluate summaries only once in a while
@@ -402,7 +401,7 @@ def train(train_loader:torch.utils.data.DataLoader,
             )
             logger.info(f"Accuracy:{summary_batch['Accuracy']}, avgF1:{summary_batch['avgF1']}")
             
-        if it == 0:
+        if it == 0 and figures_path is not None:
             # plot samples results for visual inspection
             with torch.no_grad():
                 plot_figures(inp_img, 
@@ -441,33 +440,34 @@ def eval(val_loader:torch.utils.data.DataLoader,
 
     DEVICE = get_device()
 
-    f1_avg = AverageMeter()
+    f1_avg = MulticlassF1Score(num_classes=args.nb_class, average="macro", device=DEVICE)
+    f1_by_class_avg = MulticlassF1Score(num_classes=args.nb_class, average=None, device=DEVICE)
     
-    f1_by_class_avg = AverageMeter()
-
     soft = nn.Softmax(dim=1).to(DEVICE)
 
     with torch.no_grad():
 
         for (inp_img, depth, ref) in tqdm(val_loader):
 
-            # ============ forward pass and loss ... ============
-            # compute model loss and output
             inp_img = inp_img.to(DEVICE, non_blocking=True)
-
-            # Foward Passs
+            
             out_batch = model(inp_img)
             
             out_prob = soft(out_batch['out'])
             
-            f1_macro = evaluate_f1(out_prob, ref, average="macro")
-            f1_avg.update(f1_macro)
+            mask = (ref > 0)
             
-            f1_by_class = evaluate_f1(out_prob, ref, average=None)
-            f1_by_class_avg.update(f1_by_class)
+            ref_masked = ref[mask]
+            ref_masked = ref_masked - 1
             
+            pred_class = torch.argmax(out_prob, dim=1)
+            pred_class_masked = pred_class[mask]
+            
+            f1_avg.update(pred_class_masked, ref_masked)
+            f1_by_class_avg.update(pred_class_masked, ref_masked)
+         
 
-    return f1_avg.avg, f1_by_class_avg.avg
+    return f1_avg.compute().cpu().item(), f1_by_class_avg.compute().cpu().numpy()
 
 
 
