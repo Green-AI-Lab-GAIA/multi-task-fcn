@@ -135,7 +135,6 @@ def train_epochs(config):
                                  lr_schedule=lr_schedule, 
                                  figures_path=None, 
                                  lambda_weight=config.lambda_weight,
-                                 batch_norm_layer=config.batch_norm,
                                  )
         
         f1_avg, f1_by_class_avg = eval(val_loader, model)
