@@ -1,19 +1,20 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 from logging import getLogger
 from os.path import dirname, join
 from typing import Tuple
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from scipy.ndimage import gaussian_filter
-from skimage.measure import label, regionprops_table, regionprops
-from skimage.morphology import remove_small_holes, remove_small_objects
 from shapely.geometry import Polygon
-
+from skimage.measure import label, regionprops, regionprops_table
+from skimage.morphology import remove_small_holes, remove_small_objects
 from tqdm import tqdm
 
-from src.io_operations import (fix_relative_paths, load_args, read_tiff,
-                               read_yaml, get_image_metadata)
-
+from src.io_operations import (fix_relative_paths, get_image_metadata,
+                               load_args, read_tiff, read_yaml)
 from src.utils import convert_to_minor_numeric_type
 
 args = load_args(join(dirname(__file__), "args.yaml"))
@@ -601,7 +602,7 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
 
     logger.info("Getting the components that are in the old and new segmentation")
     # get the new predicted shapes for components from old segmentation
-    intersection_label_map = get_label_intersection(old_label_img = old_selected_labels, 
+    intersection_label_map = get_label_intersection2(old_label_img = old_selected_labels, 
                                                     new_label_img = new_labels_set)
     intersection_label_map = convert_to_minor_numeric_type(intersection_label_map)
 
@@ -634,29 +635,235 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
 
     return all_labels_set, selected_labels_set
 
+def process_component(idx, old_components_img, new_components_img, new_label_img):
+    
+    component_mask = new_components_img == idx
+    
+    if np.mean(old_components_img[component_mask] == 0) < 0.9:
+        unique_labels, count_labels = np.unique(
+            new_label_img[(component_mask) & (new_label_img > 0)], 
+            return_counts=True
+        )
+        class_common = unique_labels[np.argmax(count_labels)]
+        
+        return idx, class_common, component_mask
+    
+    return idx, None, None
 
+
+def get_label_intersection2(
+    old_label_img: np.ndarray, new_label_img: np.ndarray
+) -> np.ndarray:
+    """Get the labels from the new_label_img that are in the old_components_img
+
+    Parameters
+    ----------
+    old_label_img : np.ndarray
+        Segmentation predicted by the previous iteration
+
+    new_label_img : np.ndarray
+        Segmentation predicted
+
+    Returns
+    ---------
+        The labels from the new segmentation that are in the old_components_img
+    """
+    
+    old_components_img = label(old_label_img)
+    new_components_img = label(new_label_img)
+
+    label_intersection = np.zeros_like(new_components_img)
+
+    components_to_iter = np.unique(new_components_img)
+    components_to_iter = components_to_iter[np.nonzero(components_to_iter)]
+
+    print("Getting the intersection between the old and new segmentation")
+    
+
+    
+    
+    # with ThreadPoolExecutor() as executor:
+    with ProcessPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(process_component, idx, old_components_img, new_components_img, new_label_img)
+            for idx in components_to_iter
+        ]
+        
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            idx, class_common, component_mask = future.result()
+            if class_common is not None:
+                label_intersection[component_mask] = class_common
+
+    return label_intersection
+
+
+
+def convert_labels_to_geopandas(labels:np.ndarray)->gpd.GeoDataFrame:
+    """Convert a labels map to a geopandas dataframe
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        The labels map with the segmentation
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        The geopandas dataframe with the labels map
+    """
+    
+    components = label(labels)
+    regions = regionprops(components)
+    
+    data = Parallel(n_jobs=-1)(
+        delayed(lambda region: {
+            "geometry": Polygon(region.coords),
+            "area": region.area,
+            "bbox": region.bbox,
+            "centroid": region.centroid,
+            "convex_area": region.convex_area,
+            "eccentricity": region.eccentricity,
+            "extent": region.extent,
+            "label": region.label,
+            "orientation": region.orientation,
+            "solidity": region.solidity,
+            "tree_type": labels[region.coords[0, 0], region.coords[0, 1]],
+        })(region)
+        for region in regions
+    )
+    
+    gdf = gpd.GeoDataFrame(data)
+    
+    return gdf
+    
+def get_new_segmentation_sample2(ground_truth_map:np.ndarray, 
+                                old_selected_labels:np.ndarray,
+                                old_all_labels:np.ndarray,
+                                new_pred_map:np.ndarray, 
+                                new_prob_map:np.ndarray, 
+                                new_depth_map:np.ndarray, 
+                                prob_thr:float,
+                                depth_thr:float,
+                                args:dict,
+                                sigma:float=9)->Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    
+    new_pred_map = new_pred_map.copy()
+    new_pred_map += 1
+    
+    logger.info(f"Filtering the components with distance map >= {depth_thr} and prob >= {prob_thr}")
+    
+    new_pred_map = filter_map_by_depth_prob(new_pred_map,
+                                            new_prob_map,
+                                            new_depth_map,
+                                            prob_thr,
+                                            depth_thr,
+                                            sigma)
+    
+    logger.info("Selecting the samples with good aspects")
+    new_pred_map = select_good_samples(old_all_labels,
+                                       new_pred_map,
+                                       new_prob_map,
+                                       new_depth_map,
+                                       args=args)
+    new_pred_gdf = convert_labels_to_geopandas(new_pred_map)
+    old_all_labels_gdf = convert_labels_to_geopandas(old_all_labels)
+    old_selected_labels_gdf = convert_labels_to_geopandas(old_selected_labels)
+    ground_truth_map_gdf = convert_labels_to_geopandas(ground_truth_map)
+    
+    logger.info("Joining the old and new components")
+    # filter for old_all_labels_gdf with intersect with new_pred_gdf
+    old_all_labels_gdf = old_all_labels_gdf[old_all_labels_gdf.intersects(new_pred_gdf.unary_union)]
+    # concat old_all_labels_gdf with new_pred_gdf   
+    new_labels_set = gpd.GeoDataFrame(pd.concat([old_all_labels_gdf, new_pred_gdf], ignore_index=True))
+    
+    logger.info("Getting the new components")
+    # Select components that are in new but not in old
+    delta_label_gdf = new_labels_set[~new_labels_set.intersects(old_selected_labels_gdf.unary_union)]
+    unb_delta_label_gdf = delta_label_gdf.copy()
+    # shuffle and select 5 components by tree_type
+    delta_label_gdf = delta_label_gdf.sample(frac=1, random_state=0)
+    delta_label_gdf = delta_label_gdf.groupby("tree_type").head(5)
+    
+    logger.info("Getting the components that are in the old and new segmentation")
+    intersection_label_gdf = old_selected_labels_gdf[old_selected_labels_gdf.intersects(new_labels_set.unary_union)]
+    
+    logger.info("Getting the old components but with the updated shape")
+    # remove from selected_labels_set the components that are in intersection_label_gdf
+    old_selected_labels_updated_gdf = old_selected_labels_gdf[~old_selected_labels_gdf.intersects(intersection_label_gdf.unary_union)]
+    # join updated shapes with the old ones that were not updated
+    old_selected_labels_updated_gdf = gpd.GeoDataFrame(pd.concat([old_selected_labels_updated_gdf, intersection_label_gdf], ignore_index=True))
+    
+    logger.info("Joining the old components updated shape with the new selected components")
+    # remove from old_selected_labels_updated_gdf the components that are in delta_label_gdf
+    selected_labels_set = old_selected_labels_updated_gdf[~old_selected_labels_updated_gdf.intersects(delta_label_gdf.unary_union)]
+    # join the old labels set with the new labels. balanced sample addition
+    selected_labels_set = gpd.GeoDataFrame(pd.concat([selected_labels_set, delta_label_gdf], ignore_index=True))
+    
+    logger.info('Joining the selected components with the original groud_truth train set')
+    # remove from selected_labels_set the components that are in ground_truth_map_gdf
+    selected_labels_set = selected_labels_set[~selected_labels_set.intersects(ground_truth_map_gdf.unary_union)]
+    # Adding the ground truth segmentation
+    selected_labels_set = gpd.GeoDataFrame(pd.concat([selected_labels_set, ground_truth_map_gdf], ignore_index=True))
+    
+    logger.info("Joining the old components updated shape with the new components")
+    # remove from unb_delta_label_gdf the components that are in old_selected_labels_updated_gdf
+    all_labels_set = unb_delta_label_gdf[~unb_delta_label_gdf.intersects(old_selected_labels_updated_gdf.unary_union)]
+    # join the old labels set with the new labels. unbalanced sample addition
+    all_labels_set = gpd.GeoDataFrame(pd.concat([all_labels_set, old_selected_labels_updated_gdf], ignore_index=True))
+    
+    logger.info('Joining the new components with the original groud_truth train set')
+    # remove from all_labels_set the components that are in ground_truth_map_gdf
+    all_labels_set = all_labels_set[~all_labels_set.intersects(ground_truth_map_gdf.unary_union)]
+    # Adding the ground truth segmentation
+    all_labels_set = gpd.GeoDataFrame(pd.concat([all_labels_set, ground_truth_map_gdf], ignore_index=True))
+    
+    logger.info("Converting the geopandas dataframe to numpy array")
+    # convert to numpy array
+    all_labels_set_arr = np.zeros_like(new_pred_map)
+    for idx, row in all_labels_set.iterrows():
+        all_labels_set_arr[row.geometry.coords[:, 0], row.geometry.coords[:, 1]] = row.tree_type
+        
+    selected_labels_set_arr = np.zeros_like(new_pred_map)
+    for idx, row in selected_labels_set.iterrows():
+        selected_labels_set_arr[row.geometry.coords[:, 0], row.geometry.coords[:, 1]] = row.tree_type
+    
+    return all_labels_set_arr, selected_labels_set_arr
+    
+    
+    
+    
+    
+    
+
+    
+                                        
+        
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    args = read_yaml("args.yaml")
+    
     ROOT_PATH = dirname(__file__)
-        
-    version_folder = "/media/dariossh/Extreme SSD/Arquivos SSH/2.8.2_version_data"
+    
+    version_folder = "/home/luiz.luz/multi-task-fcn/13_amazon_data"
     input_data_folder = join(ROOT_PATH, "amazon_input_data")
-
+    # create a logger with console output
+    # logger = lo
+    
+    args = read_yaml(join(version_folder, "args.yaml"))
+    
     gt_map = read_tiff(f"{input_data_folder}/segmentation/train_set.tif")
 
     test_gt_map = read_tiff(f"{input_data_folder}/segmentation/train_set.tif")
     
-    old_all_labels = read_tiff(f"{version_folder}/iter_001/new_labels/all_labels_set.tif")
+    old_all_labels = read_tiff(f"{version_folder}/iter_019/new_labels/all_labels_set.tif")
 
-    old_selected_labels = read_tiff(f"{version_folder}/iter_001/new_labels/selected_labels_set.tif")
+    old_selected_labels = read_tiff(f"{version_folder}/iter_019/new_labels/selected_labels_set.tif")
                                
-    new_pred_map = read_tiff(f"{version_folder}/iter_002/raster_prediction/join_class_0.6.TIF")
+    new_pred_map = read_tiff(f"{version_folder}/iter_020/raster_prediction/join_class_0.6.TIF")
 
-    new_prob_map = read_tiff(f"{version_folder}/iter_002/raster_prediction/join_prob_0.6.TIF")
+    new_prob_map = read_tiff(f"{version_folder}/iter_020/raster_prediction/join_prob_0.6.TIF")
 
-    depth_predicted = read_tiff(f"{version_folder}/iter_001/raster_prediction/depth_0.6.TIF")
+    depth_predicted = read_tiff(f"{version_folder}/iter_020/raster_prediction/depth_0.6.TIF")
     
     all_labels_set, selected_labels_set =  get_new_segmentation_sample(old_selected_labels = old_selected_labels,
                                                                        old_all_labels = old_all_labels,
@@ -668,7 +875,9 @@ if __name__ == "__main__":
                                                                        ground_truth_map = gt_map,
                                                                        
                                                                        prob_thr=0.7,
-                                                                       depth_thr=0.1
+                                                                       depth_thr=0.1,
+                                                                       
+                                                                       args=args
                                                                        )
     
     print("Ok")
