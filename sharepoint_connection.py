@@ -5,7 +5,6 @@ from io import BytesIO
 from os import path
 
 import pandas as pd
-from IPython.display import display
 from office365.runtime.auth.user_credential import UserCredential
 from office365.sharepoint.client_context import ClientContext
 from office365.sharepoint.files.file import File
