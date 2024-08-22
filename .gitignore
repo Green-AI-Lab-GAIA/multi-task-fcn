@@ -17,3 +17,4 @@ Original Data Source
 debug_folder
 *.ppk
 wandb
+results/
