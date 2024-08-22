@@ -13,7 +13,7 @@ wandb.init(mode="disabled", project="test")
 args = load_args("args.yaml")
 
 # change for a small dataset
-args.data_path = "00_test_data"
+args.data_path = "new_intersection_code_data"
 args.note = "Debugging code"
 args.ortho_image = glob("16x_amazon_input_data/orthoimage/*.tif")[0]
 args.train_segmentation_path = glob("16x_amazon_input_data/segmentation/*train*.tif")[0]
@@ -21,11 +21,11 @@ args.test_segmentation_path = glob("16x_amazon_input_data/segmentation/*test*.ti
 args.mask_path = "16x_amazon_input_data/mask.tif"
 
 # change for less epochs and samples
-args.epochs = 3
-args.samples = 100
+args.epochs = 10
+args.samples = 1000
 args.batch_size = 32
 args.size_crops = 256
-args.num_iter = 2
+args.num_iter = 5
 args.overlap = [0.1, 0.5]
 args.num_workers = 0
 
