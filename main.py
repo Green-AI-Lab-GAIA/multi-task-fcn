@@ -854,7 +854,7 @@ if __name__ == "__main__":
     # Save args state into data_path
     save_yaml(args, join(args.data_path, "args.yaml"))
 
-    run = wandb.init(project="segmentation", name=version_name, config=args)
+    run = wandb.init(mode="disabled")
 
     ##### LOOP #####
 
