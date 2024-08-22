@@ -188,6 +188,19 @@ class DatasetFromCoord(Dataset):
         
         return self.samples
 
+    def get_patches(self):
+        
+        np.random.shuffle(self.coords)
+        
+        image_patches = []
+
+        for i in range(len(self)):
+            image, depth, label = self[i]
+            
+            image_patches.append(image)
+            
+        return image_patches
+
 
 class DatasetForInference(Dataset):
     def __init__(self,
