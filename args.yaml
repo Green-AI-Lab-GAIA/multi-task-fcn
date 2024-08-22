@@ -5,24 +5,25 @@
 model_dir: exp_deeplab_v4
 checkpoint_file: checkpoint.pth.tar
 
-data_path: "9_amazon_input_data"
+data_path: "13_amazon_data"
 
-note: "Testing distance_map removing 0.05 of borders with no copy and paste augmentation and relaxed parameters for active learning."
+note: "Usando mais opções de overlap com [0.1, 0.5]. Aumentando o tamanho do sigma aplicado as imagens"
 
 # Input data for the model
 ortho_image: "amazon_input_data/orthoimage/NOV_2017_FINAL_004.tif"
 train_segmentation_path: "amazon_input_data/segmentation/train_set.tif"
 test_segmentation_path: "amazon_input_data/segmentation/test_set.tif"
+full_segmentation_path: "amazon_input_data/segmentation/full_set.tif"
 mask_path: "amazon_input_data/mask.tif"
 
-# You can use the 'test' set or the 'train' set as validation set
-validation_set: "test"
+# You can use the 'test', 'train' or 'full' set as validation set
+validation_set: "train"
 
 ################################# 
 ###### TRAINING parameters ######
 downsampling_factor: None
 # num samples per epoch
-samples: 5000
+samples: 2500
 # True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
@@ -72,7 +73,7 @@ size_crops: 512
 # Número de classes
 nb_class: 17
 # samples per epoch
-overlap: [0.5]
+overlap: [0.1, 0.5]
 
 
 ################################
@@ -81,19 +82,19 @@ overlap: [0.5]
 
 # probability and distance map thershold to filter new components
 prob_thr: 0.7
-depth_thr: 0.2
+depth_thr: 0.1
 # Num of iter
-num_iter : 20
+num_iter : 22
 
 lower_limit_area: 25_000
 upper_limit_area: "inf"
 
 lower_limit_area_rlted_to_tree_type: -0.3
-upper_limit_area_rlted_to_tree_type: 1.5
-lower_limit_solidity_rlted_to_tree_type: -1
+upper_limit_area_rlted_to_tree_type: 0.7
+lower_limit_solidity_rlted_to_tree_type: -0.5
 
 # Availables scales: "log", None
 scale_area: None
 
 # Sigma value for gaussian filter in distance map
-sigma : 5
+sigma : 30
