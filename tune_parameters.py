@@ -8,6 +8,7 @@ from os.path import join, abspath, dirname
 
 from evaluation import predict_network
 from main import get_learning_rate_schedule, train_epochs
+from src.deepvlab3 import DeepLabv3
 from src.io_operations import get_image_metadata, read_tiff, read_yaml, save_yaml
 from src.metrics import evaluate_metrics
 from src.model import build_model, train, eval
@@ -16,6 +17,7 @@ from src.dataset import DatasetForInference, DatasetFromCoord
 from src.logger import create_logger
 import argparse
 import torch.backends.cudnn as cudnn
+import yaml
 
 logger = create_logger("tune_parameters", "tune_parameters.log")
 
@@ -84,13 +86,13 @@ def train_epochs(config):
     orthoimage_meta = get_image_metadata(ORTHOIMAGE_PATH)
     ortho_image_shape = (orthoimage_meta["count"], orthoimage_meta["height"], orthoimage_meta["width"])
     
-    model = build_model(
-        ortho_image_shape,
-        config.nb_class,  
-        config.arch, 
-        config.pretrained,
-        psize = config.size_crops,
+    ###### BUILD MODEL ########    
+    model = DeepLabv3(
+        in_channels = ortho_image_shape[0],
+        num_classes = config.nb_class,
+        pretrained = config.pretrained,
         dropout_rate = config.dropout_rate,
+        batch_norm = config.batch_norm_layer,
     )
     logger.info("Model built")
     
@@ -193,8 +195,6 @@ def train_epochs(config):
     logger.info(f"Time spent: {(time.time() - current_time_seconds)/60} minutes")
     
     logger.info("Save model")
-    torch.save(model.state_dict(), 
-               join(wandb.run.dir, "model.pth"))
     
     folder_to_save = join(dirname(__file__), "results", f"model_{current_time_seconds}")
     check_folder(folder_to_save)
@@ -242,10 +242,25 @@ def test_code(sweep_config):
     
 
 if __name__ == "__main__":  
+    
+    SWEEP_ID_FILE = "sweep_id.yaml"
     SWEEP_FILE = "tune_parameters.yaml"
+    
     sweep_config = read_yaml(SWEEP_FILE)
     
-    # SWEEP_ID = wandb.sweep(sweep_config, project="tune_parameters")
-    # print(SWEEP_ID)
-    SWEEP_ID = "iw33ssxx"
-    wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
+    with open(SWEEP_ID_FILE, "r") as file:
+        SWEEP_ID = yaml.safe_load(file)["SWEEP_ID"]
+        
+    try:
+        wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
+    
+    
+    except wandb.Error as e:
+        
+        SWEEP_ID = wandb.sweep(sweep_config, project="tune_parameters")
+        
+        # save sweep id
+        with open(SWEEP_FILE, "w") as file:
+            yaml.dump({"SWEEP_ID": SWEEP_ID}, file)
+            
+        wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
