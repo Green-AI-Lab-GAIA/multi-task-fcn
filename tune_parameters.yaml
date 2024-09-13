@@ -4,28 +4,32 @@ metric:
   name: f1_score
   goal: maximize
 parameters:
+  activation_aux_layer:
+    values: ["sigmoid", "relu", "gelu"]
+  early_stopping_threshold:
+    values: [0.001, 0.01, 0.1]
   overlap:
-    values: [0.1, 0.2, 0.3, 0.4, 0.5]
+    values: [[0.1, 0.3, 0.5]]
   copy_and_paste_augmentation:
     values: [true, false]
   dropout_rate:
-    values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    values: [0.1, 0.3, 0.5, 0.7, 0.9]
   size_crops:
-    values: [256]
+    values: [512]
   batch_norm_layer:
     values: [true, false]
   lambda_weight:
-    values: [0.5, 1, 2, 3, 4, 5]
+    values: [0.5, 1, 2]
   pretrained:
     values: [true, false]
   standardize:
-    values: [true, false]
+    value: true
   augment:
     value: true
   samples:
-    values: [2500, 5000, 10000]
+    value: 2500
   batch_size:
-    value: 128
+    value: 10
   nb_class:
     value: 17
   arch:
@@ -35,7 +39,7 @@ parameters:
   final_lr:
     value: 0.0001
   weight_decay:
-    value: 1e-06
+    value: 0.000001
   warmup_epochs:
     value: 5
   start_warmup:
@@ -47,10 +51,10 @@ parameters:
   num_workers:
     value: 8
   orthoimage_path:
-    value: "2x_amazon_input_data/orthoimage/orthoimage.tif"
+    value: "amazon_input_data/orthoimage/orthoimage.tif"
   distance_map_path:
-    value: "2x_amazon_input_data/distance_map/train_distance_map.tif"
+    value: "amazon_input_data/distance_map/train_distance_map.tif"
   segmentation_path:
-    value: "2x_amazon_input_data/segmentation/train_set.tif"
+    value: "amazon_input_data/segmentation/train_set.tif"
   ground_truth_test_path:
-    value: "2x_amazon_input_data/segmentation/test_set.tif"
+    value: "amazon_input_data/segmentation/test_set.tif"

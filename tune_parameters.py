@@ -95,7 +95,7 @@ def train_epochs(config):
         batch_norm = config.batch_norm_layer,
     )
     logger.info("Model built")
-    
+    print(config.weight_decay)
     ###### BULD OPTMIZER #######
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -143,7 +143,7 @@ def train_epochs(config):
         
         wandb.log({"f1_train_score": f1_avg})
         
-        if (f1_avg - best_val) > 0.0009: 
+        if (f1_avg - best_val) > config.early_stopping_threshold:
             
             best_val = f1_avg
             count_early = 0
@@ -157,33 +157,43 @@ def train_epochs(config):
     
     ######### INFERENCE ##########
     logger.info("Start inference")
-    test_dataset = DatasetForInference(
-        ORTHOIMAGE_PATH,
-        config.size_crops,
-        config.overlap,
-    )
-    if config.standardize:
-        test_dataset.standardize_image_channels()
+    for overlap in config.overlap:
+        test_dataset = DatasetForInference(
+            ORTHOIMAGE_PATH,
+            config.size_crops,
+            overlap,
+        )
+        if config.standardize:
+            test_dataset.standardize_image_channels()
 
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=config.batch_size*4,
-        num_workers=config.num_workers,
-        pin_memory=True,
-        drop_last=False,
-        shuffle=False,
-    )
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset,
+            batch_size=config.batch_size*4,
+            num_workers=config.num_workers,
+            pin_memory=True,
+            drop_last=False,
+            shuffle=False,
+        )
+        
+        prob_map, pred_class, depth_map = predict_network(
+            ortho_image_shape = ortho_image_shape,
+            dataloader = test_loader,
+            model = model,
+            num_classes = config.nb_class,
+            activation_aux_layer = config.activation_aux_layer,    
+        )
+        
+        if overlap == 0:
+            prob_map_final = prob_map / len(config.overlap)
+            
+        else:
+            prob_map_final += prob_map / len(config.overlap)
     
-    prob_map, pred_class, depth_map = predict_network(
-        ortho_image_shape = ortho_image_shape,
-        dataloader = test_loader,
-        model = model,
-        num_classes = config.nb_class,
-    )
+    pred_class_final = np.argmax(prob_map_final, axis=1)
     
     logger.info("Metrics evaluation")
     
-    metrics_test = evaluate_metrics(pred_class, GROUND_TRUTH_TEST)
+    metrics_test = evaluate_metrics(pred_class_final, GROUND_TRUTH_TEST)
 
     wandb.log({"f1_score": metrics_test["avgF1"]})
     wandb.log({"precision": metrics_test["avgPre"]})
@@ -237,6 +247,7 @@ def test_code(sweep_config):
     config["epochs"] = 1
     config["samples"] = 100
     config["size_crops"] = 512
+    config["overlap"] = [0.1]
     
     train_epochs(config)
     
@@ -250,7 +261,7 @@ if __name__ == "__main__":
     
     with open(SWEEP_ID_FILE, "r") as file:
         SWEEP_ID = yaml.safe_load(file)["SWEEP_ID"]
-        
+    
     try:
         wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
     
@@ -260,7 +271,7 @@ if __name__ == "__main__":
         SWEEP_ID = wandb.sweep(sweep_config, project="tune_parameters")
         
         # save sweep id
-        with open(SWEEP_FILE, "w") as file:
+        with open(SWEEP_ID_FILE, "w") as file:
             yaml.dump({"SWEEP_ID": SWEEP_ID}, file)
             
         wandb.agent(SWEEP_ID, function=tune, count=50, project="tune_parameters")
