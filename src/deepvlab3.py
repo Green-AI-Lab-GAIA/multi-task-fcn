@@ -125,7 +125,8 @@ class DeepLabv3(nn.Module):
         
         if isdir(model_path):
             model_file = os.listdir(model_path)
-            self.model = torch.load(join(model_path, model_file[0]))
+            self.model = torch.load(join(model_path, model_file[0]),
+                                    weights_only=False)
         
         else:
             check_folder(model_path)

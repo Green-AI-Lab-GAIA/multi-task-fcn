@@ -224,7 +224,7 @@ def load_weights(model: nn.Module, checkpoint_file_path:str)-> nn.Module:
     # load weights
     if os.path.isfile(checkpoint_file_path):
 
-        state_dict = torch.load(checkpoint_file_path, map_location=DEVICE)
+        state_dict = torch.load(checkpoint_file_path, map_location=DEVICE, weights_only=False)
 
         if "state_dict" in state_dict:
             state_dict = state_dict["state_dict"]

@@ -457,7 +457,7 @@ def restart_from_checkpoint(ckp_paths:str, run_variables:dict=None, **kwargs):
     logger.info("Found checkpoint at {}".format(ckp_path))
 
     # open checkpoint file and load to GPU
-    checkpoint = torch.load(ckp_path, map_location=DEVICE)
+    checkpoint = torch.load(ckp_path, map_location=DEVICE, weights_only=False)
 
 
     # key is what to look for in the checkpoint file
@@ -497,7 +497,7 @@ def restore_checkpoint_variables(checkpoint_path:str)->dict:
                   "count_early": 0, 
                   "is_iter_finished":False}
     
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     for key in to_restore.keys():
         to_restore[key] = checkpoint[key]
