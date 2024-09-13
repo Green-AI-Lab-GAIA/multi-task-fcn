@@ -51,7 +51,7 @@ def downsample_tiff_files(input_folder_path, downsample_factor, max_workers=cpu_
             test_set.shape[0] // np.sqrt(downsample_factor), 
             test_set.shape[1] // np.sqrt(downsample_factor)
         ),
-        anti_aliasing=True,
+        anti_aliasing=False,
         order=0,
     ).round().astype("uint8")
     del test_set
