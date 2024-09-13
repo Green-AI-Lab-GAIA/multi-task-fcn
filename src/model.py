@@ -298,7 +298,8 @@ def train(train_loader:torch.utils.data.DataLoader,
           optimizer:torch.optim.Optimizer, 
           epoch:int, 
           lr_schedule:np.ndarray, 
-          lambda_weight:float, 
+          lambda_weight:float,
+          activation_aux_layer:Literal["sigmoid", "relu", "gelu"] = "sigmoid",
           figures_path:str=None):
     """Train model for one epoch
 
@@ -331,10 +332,21 @@ def train(train_loader:torch.utils.data.DataLoader,
     
     loss_avg = AverageMeter()
     
+    if activation_aux_layer == "sigmoid":
+        activation_aux_module = nn.Sigmoid().to(DEVICE)
+    
+    elif activation_aux_layer == "relu":
+        activation_aux_module = nn.ReLU().to(DEVICE)
+        
+    elif activation_aux_layer == "gelu":
+        activation_aux_module = nn.GELU().to(DEVICE)
+    
+    else:
+        raise ValueError(f"Unknown activation function {activation_aux_layer}")
+    
     # define functions
     soft = nn.Softmax(dim=1).to(DEVICE)
-    sig = nn.Sigmoid().to(DEVICE)   
-
+    
     # define losses
     # criterion = nn.NLLLoss(reduction='none').cuda()
     aux_criterion = nn.MSELoss(reduction='none').to(DEVICE)
@@ -362,10 +374,11 @@ def train(train_loader:torch.utils.data.DataLoader,
         
         # Foward Passs
         out_batch = model(inp_img)
+        depht_out = activation_aux_module(out_batch['aux'][:,0,:,:])
         
         loss1 = mask*categorical_focal_loss(out_batch["out"], ref_copy)
 
-        loss2 = mask*aux_criterion(sig(out_batch['aux'])[:,0,:,:], depth)
+        loss2 = mask*aux_criterion(depht_out, depth)
         
         loss = (loss1 + lambda_weight*loss2)/2 
         loss = torch.sum(loss)/torch.sum(ref>0)
@@ -408,7 +421,7 @@ def train(train_loader:torch.utils.data.DataLoader,
                             ref, 
                             soft(out_batch['out']),
                             depth,
-                            sig(out_batch['aux']),
+                            depht_out,
                             figures_path,
                             epoch,
                             'train')

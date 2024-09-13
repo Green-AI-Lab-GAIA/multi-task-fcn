@@ -3,7 +3,7 @@ import os
 from os.path import join, exists
 from logging import Logger
 from logging import getLogger
-from typing import Tuple
+from typing import Literal, Tuple
 
 import numpy as np
 import torch
@@ -81,7 +81,8 @@ def define_test_loader(ortho_image:str, size_crops:int, overlap_rate:float)->Tup
 def predict_network(ortho_image_shape:Tuple, 
                     dataloader:torch.utils.data.DataLoader, 
                     model:nn.Module,
-                    num_classes:int):
+                    num_classes:int,
+                    activation_aux_layer:Literal["sigmoid", "relu", "gelu"]="sigmoid"):
     """
     It runs the inference of the entire image map.\\
     Get depth values and the probability of each class
@@ -114,10 +115,19 @@ def predict_network(ortho_image_shape:Tuple,
     DEVICE = get_device()
     model.eval()
     
-    soft = nn.Softmax(dim=1).to(DEVICE)
-    sig = nn.Sigmoid().to(DEVICE)
-    
+    if activation_aux_layer == "sigmoid":
+        activation_aux_layer = nn.Sigmoid()
+    elif activation_aux_layer == "relu":
+        activation_aux_layer = nn.ReLU()
+    elif activation_aux_layer == "gelu":
+        activation_aux_layer = nn.GELU()
+    else:
+        raise ValueError("Activation function not recognized")
 
+    activation_aux_layer = activation_aux_layer.to(DEVICE)
+    
+    activation_main_layer = nn.Softmax(dim=1).to(DEVICE)
+    
     with torch.no_grad(): 
         for i, (image, slices) in enumerate(tqdm(dataloader)):      
             # ============ multi-res forward passes ... ============
@@ -126,11 +136,11 @@ def predict_network(ortho_image_shape:Tuple,
             
             out_pred = model(input_batch) 
                
-            out_batch = soft(out_pred['out'])
+            out_batch = activation_main_layer(out_pred['out'])
             out_batch = out_batch.permute(0,2,3,1)
             out_batch = out_batch.data.cpu().numpy()
             
-            depth_out = sig(out_pred['aux']).data.cpu().numpy()
+            depth_out = activation_aux_layer(out_pred['aux']).data.cpu().numpy()
             
             batch_size, output_height, output_width, cl = out_batch.shape
             
