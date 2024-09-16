@@ -15,7 +15,7 @@ parameters:
   dropout_rate:
     values: [0.1, 0.3, 0.5, 0.7, 0.9]
   size_crops:
-    values: [512]
+    value: 512
   batch_norm_layer:
     values: [true, false]
   lambda_weight:

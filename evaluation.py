@@ -82,7 +82,8 @@ def predict_network(ortho_image_shape:Tuple,
                     dataloader:torch.utils.data.DataLoader, 
                     model:nn.Module,
                     num_classes:int,
-                    activation_aux_layer:Literal["sigmoid", "relu", "gelu"]="sigmoid"):
+                    activation_aux_layer:Literal["sigmoid", "relu", "gelu"]="sigmoid",
+                    debug_mode=False):
     """
     It runs the inference of the entire image map.\\
     Get depth values and the probability of each class
@@ -163,6 +164,9 @@ def predict_network(ortho_image_shape:Tuple,
                     column_start[b]:column_end[b]
                 ] += 1
 
+            if debug_mode and i > 2:
+                break
+                
         # avoid zero division
         count_image[count_image == 0] = 1
         
