@@ -267,8 +267,14 @@ def test_code(sweep_config):
 
     config["epochs"] = 1
     config["samples"] = 100
-    config["size_crops"] = 512
-    config["overlap"] = [0.1]
+    config["size_crops"] = 256
+    config["overlap"] = [0.1, 0.5]
+    config["num_workers"] = 8
+    
+    config["orthoimage_path"] = "amazon_input_data/orthoimage/orthoimage.tif"
+    config["distance_map_path"] = "amazon_input_data/distance_map/train_distance_map.tif"
+    config["segmentation_path"] = "amazon_input_data/segmentation/train_set.tif"
+    config["ground_truth_test_path"] = "amazon_input_data/segmentation/test_set.tif"
     
     train_epochs(config)
     
