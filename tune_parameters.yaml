@@ -9,7 +9,7 @@ parameters:
   early_stopping_threshold:
     values: [0.001, 0.01, 0.1]
   overlap:
-    values: [[0.1, 0.3, 0.5]]
+    values: [[0.1, 0.3],[0.3,0.5],[0.1, 0.5]]
   copy_and_paste_augmentation:
     values: [true, false]
   dropout_rate:
