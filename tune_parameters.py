@@ -18,6 +18,7 @@ from src.logger import create_logger
 import argparse
 import torch.backends.cudnn as cudnn
 import yaml
+import gc
 
 logger = create_logger("tune_parameters", "tune_parameters.log")
 
@@ -155,9 +156,16 @@ def train_epochs(config):
     cudnn.benchmark = False
     torch.cuda.empty_cache()
     
+    # free up memory
+    del train_dataset, train_loader, val_dataset, val_loader
+    gc.collect()
+    
     ######### INFERENCE ##########
     logger.info("Start inference")
-    for overlap in config.overlap:
+    for num, overlap in enumerate(config.overlap):
+        
+        logger.info(f"Inference with: {overlap}")
+        
         test_dataset = DatasetForInference(
             ORTHOIMAGE_PATH,
             config.size_crops,
@@ -183,13 +191,26 @@ def train_epochs(config):
             activation_aux_layer = config.activation_aux_layer,    
         )
         
-        if overlap == 0:
-            prob_map_final = prob_map / len(config.overlap)
+        del pred_class
+        
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        logger.info("Predictions done")
+        
+        if num == 0:
+            prob_map_final = np.uint8(prob_map * np.float16(255)) // np.uint8(len(config.overlap))
+            del prob_map, depth_map
             
         else:
-            prob_map_final += prob_map / len(config.overlap)
+            prob_map_final += np.uint8(prob_map * np.float16(255)) // np.uint8(len(config.overlap))
+            del prob_map, depth_map
+        
+        gc.collect()
     
-    pred_class_final = np.argmax(prob_map_final, axis=1)
+    
+    logger.info("Computing class with highest probability")
+    pred_class_final = np.argmax(prob_map_final, axis=-1)
     
     logger.info("Metrics evaluation")
     
