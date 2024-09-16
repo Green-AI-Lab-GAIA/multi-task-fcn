@@ -173,6 +173,7 @@ def predict_network(ortho_image_shape:Tuple,
         pred_prob = pred_prob/count_image[...,np.newaxis]
         pred_depth = pred_depth/count_image
         
+        del count_image
         return pred_prob, np.argmax(pred_prob,axis=-1).astype("uint8"), pred_depth
 
 
