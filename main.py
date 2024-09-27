@@ -505,14 +505,14 @@ def train_iteration(current_iter_folder:str, args:dict):
     logger.info("Building data done with {} images loaded.".format(len(train_loader)))
 
     orthoimage_meta = get_image_metadata(args.ortho_image)
-
-    model = DeepLabv3(
-        in_channels = orthoimage_meta["count"],
-        num_classes = args.nb_class, 
-        pretrained = args.is_pretrained, 
-        dropout_rate = args.dropout_rate,
-        batch_norm = args.batch_norm,
-        downsampling_factor = args.downsampling_factor,
+    model = build_model(
+        in_channels=orthoimage_meta["count"],
+        num_classes=args.nb_class,
+        arch=args.arch,
+        dropout_rate=args.dropout_rate,
+        batch_norm=args.batch_norm,
+        pretrained=args.is_pretrained,
+        psize=args.size_crops,
     )
 
     logger.info("Building model done.")

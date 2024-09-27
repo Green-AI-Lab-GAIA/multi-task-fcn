@@ -15,11 +15,10 @@ from tqdm import tqdm
 
 ROOT_PATH = dirname(dirname(__file__))
 sys.path.append(ROOT_PATH)
-
+from src.deepvlab3 import DeepLabv3
 from src.deepvlab3plus import DeepLabv3_plus
 from src.deepvlab3plus_resnet9 import DeepLabv3Plus_resnet9
 from src.metrics import evaluate_f1, evaluate_metrics
-from src.resnet import ResUnet
 from src.utils import (AverageMeter, check_folder, get_device, plot_figures)
 from src.io_operations import load_norm, read_yaml
 import wandb
@@ -28,172 +27,50 @@ args = read_yaml(join(ROOT_PATH, "args.yaml"))
 logger = getLogger("__main__")
 
 
-def define_loader(orto_img:str, gt_lab:np.ndarray, size_crops:int, test=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Define how the image will be loaded to the model
-
-    Parameters
-    ----------
-    orto_img : str
-        The file path to the map image. The image was generated from remote sensing
-    gt_lab : np.ndarray
-        The 2D array with segmentation labels
-    size_crops : int
-        The borders from the image to cut
-    test : bool, optional
-        Define if it is loaded for testing, by default False
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-        - image :  np.ndarray
-            The image from remote sensing with shape [row, col, bands]
-        - coords : np.ndarray
-            The positions in the image where the values are different of 0.
-        - gt_lab : 
-            The segmentation image with borders removed
-        - gt_lab[gt_lab!=0]
-            The position where the segmentation is different of 0.
-    """
-
-    if not test:
-        image = load_norm(orto_img)
-    
-    gt_lab[:size_crops,:] = 0
-    gt_lab[-size_crops:,:] = 0
-    gt_lab[:,:size_crops] = 0
-    gt_lab[:,-size_crops:] = 0
-
-    coords = np.where(gt_lab!=0)
-    coords = np.array(coords)
-    coords = np.rollaxis(coords, 1, 0)
-
-    if test:
-        return None, coords, gt_lab, gt_lab[gt_lab!=0]
-    
-    return image, coords, gt_lab, gt_lab[gt_lab!=0]
-
-
-def build_model(image_shape:list, 
+def build_model(in_channels:list, 
                 num_classes:int, 
-                arch:Literal["resunet", "deeplabv3_resnet50", "deeplabv3+", "deeplabv3+_resnet9"], 
+                arch:Literal["deeplabv3_resnet50","deeplabv3_resnet101","deeplabv3+_resnet34","deeplabv3+_resnet18","deeplabv3+_resnet10", "deeplabv3+_resnet9"], 
                 pretrained:bool, 
                 psize:int,
-                dropout_rate:float)->nn.Module:
-    """Build model according to architecture
-    The architecture can be 'resunet' or 'deeplabv3_resnet50'
-    The model can be either pretrained or randomly initialized
-
-    Parameters
-    ----------
-    image_shape : list
-        List with the shape of the input image.
-    num_classes : int
-        Num of unique classes in the dataset
-    arch : str
-        Architecture name to build the model
-        The architecture can be 'resunet' or 'deeplabv3_resnet50'
-    filters : list
-        List of number of filters for each block of the model, if the model is resunet
-    pretrained : bool
-        If True, the model is loaded from pretrained weights available in pytorch hub
-    psize : int
-        Patch size
-    dropout_rate : float
-        Dropout rate for classification task
-
-    Returns
-    -------
-    nn.Module
-        Pytorch model with the specified architecture
-    """
+                dropout_rate:float,
+                batch_norm:bool,
+                **kwargs)->nn.Module:
 
 
     # build model
-    if arch == 'resunet':    # trained ResUnet from scratch
-        model = ResUnet(
-            channel=image_shape[0], 
-            nb_classes = num_classes, 
-            filters= [32, 32, 32, 32])
-
-    # build model
-    elif arch == "deeplabv3_resnet50":
-
-        # use deeplabv3_resnet50 pretrained or randomly initialized
-        if pretrained:
-            # If is pretrained, the model is loaded from pretrained_models folder.
-            # the weights model were downloaded from pytorch hub
-            model_path = os.path.join(ROOT_PATH, 'pretrained_models', arch)
-
-        else:
-            # If is not pretrained, doesnt download/load model with pretrained weights
-            model_path = os.path.join(ROOT_PATH, 'random_w_models', arch)
-
-
-        if os.path.isdir(model_path):
-            model_file = os.listdir(model_path)
-            model = torch.load(os.path.join(model_path, model_file[0]))
-
-
-        else:
-            # If doesnt have the model, download from pytorch hub
-            check_folder(model_path)
-            
-            if pretrained:
-                weights = "DeepLabV3_ResNet50_Weights.COCO_WITH_VOC_LABELS_V1"
-
-            else:
-                weights = None
-
-            model = torch.hub.load('pytorch/vision:v0.10.0', 
-                                    arch, 
-                                    weights = weights,
-                                    pretrained = pretrained,
-                                    aux_loss = True)
-            
-            torch.save(model, os.path.join(model_path,'model'))
-        
-
-        # modify initial conv and classfiers to the input image shape and num of classes
-        model.backbone.conv1 = nn.Conv2d(
-            in_channels = image_shape[0],
-            out_channels= 64, 
-            kernel_size=(7, 7), 
-            stride=(2, 2), 
-            padding=(3, 3), 
-            bias=False
-        )
-
-        # Adding an auxiliar classifier for distance map task
-        model.aux_classifier[4] = nn.Conv2d(
-            in_channels = 256, 
-            out_channels = 1, 
-            kernel_size=(1, 1), 
-            stride=(1, 1)
-        )
-        
-        # modify classifier to the num of classes
-        model.classifier[4] = nn.Sequential(
-            nn.Dropout(p = dropout_rate),
-            nn.Conv2d(
-                in_channels = 256, 
-                out_channels = num_classes, 
-                kernel_size=(1, 1), 
-                stride=(1, 1)
-            )
+    if arch == "deeplabv3_resnet50":
+        model = DeepLabv3(
+            in_channels = in_channels,
+            num_classes = num_classes, 
+            pretrained = pretrained, 
+            dropout_rate = dropout_rate,
+            batch_norm = batch_norm
         )
     
-    elif arch == "deeplabv3+":
+    elif arch == "deeplabv3_resnet101":
+        model = DeepLabv3(
+            in_channels = in_channels,
+            num_classes = num_classes, 
+            pretrained = pretrained, 
+            dropout_rate = dropout_rate,
+            batch_norm = batch_norm,
+            resnet_arch = "resnet101"
+        )
+
+    elif arch.startswith("deeplabv3+"):
+        # get resnet_depth
+        resnet_depth = int(arch.split("resnet")[-1])
         model = DeepLabv3_plus(
-            model_depth = 10,
+            model_depth = resnet_depth,
             nb_class = num_classes,
-            num_ch_1 = image_shape[0],
+            num_ch_1 = in_channels,
             psize = psize
         )
 
 
     elif arch == "deeplabv3+_resnet9":
         model = DeepLabv3Plus_resnet9(
-            num_ch = image_shape[0],
+            num_ch = in_channels,
             num_class = num_classes,
             psize = psize
         )
