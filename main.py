@@ -4,7 +4,7 @@ import math
 import os
 import shutil
 from multiprocessing import Process
-from os.path import dirname, exists, isfile, join, abspath
+from os.path import abspath, dirname, exists, isfile, join
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,30 +14,28 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.parallel
 import torch.optim
+from skimage.measure import label
 from tqdm import tqdm
 
-from skimage.measure import label
-
+import wandb
 from evaluation import evaluate_iteration
 from generate_distance_map import generate_distance_map
 from pred2raster import pred2raster
-from sample_selection import get_new_segmentation_sample, get_components_stats
+from sample_selection import get_components_stats, get_new_segmentation_sample
 from src.dataset import DatasetFromCoord
+from src.deepvlab3 import DeepLabv3
 from src.io_operations import (ParquetUpdater, array2raster,
-                               convert_tiff_to_npy, get_image_metadata,
-                               get_npy_filepath_from_tiff, load_args,
+                               get_image_metadata,
+                               load_args,
                                read_tiff, save_yaml)
-from src.lazy_dataset import LazyDatasetFromCoord
 from src.logger import create_logger
 from src.metrics import evaluate_component_metrics, evaluate_metrics
-from src.model import (build_model, define_loader, eval, load_weights,
-                       save_checkpoint, train)
-from src.utils import (check_folder, fix_random_seeds, get_device, oversamp,
-                       print_sucess, restart_from_checkpoint,
-                       restore_checkpoint_variables, from_255_to_1)
-from src.deepvlab3 import DeepLabv3
+from src.model import eval, load_weights, save_checkpoint, train, build_model
+from src.utils import (check_folder, fix_random_seeds, from_255_to_1,
+                       get_device, print_sucess,
+                       restart_from_checkpoint, restore_checkpoint_variables)
 from visualization import generate_labels_view
-import wandb
+
 gc.set_threshold(0)
 
 plt.set_loglevel(level = 'info')
