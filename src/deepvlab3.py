@@ -9,9 +9,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_mobilenet_v3_large
+from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_mobilenet_v3_large, deeplabv3_resnet101
 
 from src.utils import check_folder
+from typing import Literal
 
 class UpsampleBlock(nn.Module):
     def __init__(self, in_channels, out_channels, scale_factor=2):
@@ -41,6 +42,7 @@ class DeepLabv3(nn.Module):
                  num_classes:int, 
                  pretrained:bool, 
                  dropout_rate:float, 
+                 resnet_arch:Literal["resnet50", "resnet101"]="resnet50",
                  batch_norm:bool=False,
                  downsampling_factor:int=None
                  ):
@@ -52,7 +54,7 @@ class DeepLabv3(nn.Module):
         self.dropout_rate = dropout_rate
         self.batch_norm = batch_norm
         self.downsampling_factor = downsampling_factor
-        
+        self.resnet_arch = resnet_arch
         self.load_model()
          
         self.model.backbone.conv1 = nn.Conv2d(
@@ -119,20 +121,25 @@ class DeepLabv3(nn.Module):
         
     def load_model(self):
         if self.pretrained:
-            model_path = join(ROOT_PATH, 'pretrained_models', 'deeplabv3_resnet50')
+            model_path = join(ROOT_PATH, 'pretrained_models', f'deeplabv3_{self.resnet_arch}')
         else:
-            model_path = join(ROOT_PATH, 'random_w_models', 'deeplabv3_resnet50')
+            model_path = join(ROOT_PATH, 'random_w_models', f'deeplabv3_{self.resnet_arch}')
         
         if isdir(model_path):
             model_file = os.listdir(model_path)
             self.model = torch.load(join(model_path, model_file[0]),
                                     weights_only=False)
         
-        else:
+        elif self.resnet_arch == "resnet50":
             check_folder(model_path)
             self.model = deeplabv3_resnet50(pretrained=self.pretrained,
                                             aux_loss=True)
             torch.save(self.model, join(model_path, 'model'))
+        
+        elif self.resnet_arch == "resnet101":
+            check_folder(model_path)
+            self.model = deeplabv3_resnet101(pretrained=self.pretrained,
+                                            aux_loss=True)
     
     def forward(self, x):
         
