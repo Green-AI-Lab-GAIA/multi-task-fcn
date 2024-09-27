@@ -11,7 +11,12 @@ from scipy.ndimage import gaussian_filter
 from shapely.geometry import Polygon
 from skimage.measure import label, regionprops, regionprops_table
 from skimage.morphology import remove_small_holes, remove_small_objects
+from skimage.measure import label, regionprops
+from shapely.geometry import Polygon, MultiPoint
+from shapely.geometry.polygon import orient
+from scipy.spatial import ConvexHull
 from tqdm import tqdm
+from skimage.draw import polygon
 
 from src.io_operations import (fix_relative_paths, get_image_metadata,
                                load_args, read_tiff, read_yaml)
@@ -635,6 +640,7 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
 
     return all_labels_set, selected_labels_set
 
+
 def process_component(idx, old_components_img, new_components_img, new_label_img):
     
     component_mask = new_components_img == idx
@@ -680,8 +686,6 @@ def get_label_intersection2(
     print("Getting the intersection between the old and new segmentation")
     
 
-    
-    
     # with ThreadPoolExecutor() as executor:
     with ProcessPoolExecutor(max_workers=8) as executor:
         futures = [
@@ -697,27 +701,36 @@ def get_label_intersection2(
     return label_intersection
 
 
+def convert_gpd_to_array(gdf:gpd.GeoDataFrame, shape:Tuple[int, int])->np.ndarray:
+      
+    output_array = np.zeros_like(new_pred_map)
+
+    for idx, row in gdf.iterrows():
+        x,y = row.geometry.exterior.xy
+        rr, cc = polygon(x, y)
+        output_array[rr, cc] = 1
+    
+    return output_array
+
 
 def convert_labels_to_geopandas(labels:np.ndarray)->gpd.GeoDataFrame:
-    """Convert a labels map to a geopandas dataframe
-
-    Parameters
-    ----------
-    labels : np.ndarray
-        The labels map with the segmentation
-
-    Returns
-    -------
-    gpd.GeoDataFrame
-        The geopandas dataframe with the labels map
-    """
     
     components = label(labels)
     regions = regionprops(components)
     
-    data = Parallel(n_jobs=-1)(
-        delayed(lambda region: {
-            "geometry": Polygon(region.coords),
+    data = []
+    for region in regions:
+        hull = ConvexHull(region.coords)
+        hull_points = region.coords[hull.vertices]
+        
+        # Create the polygon from the hull points
+        poly = Polygon(hull_points)
+        
+        # Ensure the polygon is oriented correctly (counter-clockwise)
+        poly = orient(poly)
+        
+        data.append(
+            {"geometry": poly,
             "area": region.area,
             "bbox": region.bbox,
             "centroid": region.centroid,
@@ -728,14 +741,13 @@ def convert_labels_to_geopandas(labels:np.ndarray)->gpd.GeoDataFrame:
             "orientation": region.orientation,
             "solidity": region.solidity,
             "tree_type": labels[region.coords[0, 0], region.coords[0, 1]],
-        })(region)
-        for region in regions
-    )
+        })
     
     gdf = gpd.GeoDataFrame(data)
     
     return gdf
-    
+
+
 def get_new_segmentation_sample2(ground_truth_map:np.ndarray, 
                                 old_selected_labels:np.ndarray,
                                 old_all_labels:np.ndarray,
@@ -765,6 +777,7 @@ def get_new_segmentation_sample2(ground_truth_map:np.ndarray,
                                        new_prob_map,
                                        new_depth_map,
                                        args=args)
+
     new_pred_gdf = convert_labels_to_geopandas(new_pred_map)
     old_all_labels_gdf = convert_labels_to_geopandas(old_all_labels)
     old_selected_labels_gdf = convert_labels_to_geopandas(old_selected_labels)
@@ -819,13 +832,9 @@ def get_new_segmentation_sample2(ground_truth_map:np.ndarray,
     
     logger.info("Converting the geopandas dataframe to numpy array")
     # convert to numpy array
-    all_labels_set_arr = np.zeros_like(new_pred_map)
-    for idx, row in all_labels_set.iterrows():
-        all_labels_set_arr[row.geometry.coords[:, 0], row.geometry.coords[:, 1]] = row.tree_type
-        
-    selected_labels_set_arr = np.zeros_like(new_pred_map)
-    for idx, row in selected_labels_set.iterrows():
-        selected_labels_set_arr[row.geometry.coords[:, 0], row.geometry.coords[:, 1]] = row.tree_type
+    all_labels_set_arr = convert_gpd_to_array(all_labels_set, new_pred_map.shape)
+    
+    selected_labels_set_arr = convert_gpd_to_array(selected_labels_set, new_pred_map.shape)
     
     return all_labels_set_arr, selected_labels_set_arr
     
