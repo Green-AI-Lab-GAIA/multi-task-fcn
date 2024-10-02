@@ -191,7 +191,7 @@ def train_epochs(config):
             activation_aux_layer = config.activation_aux_layer,    
         )
         
-        del pred_class
+        del pred_class, depth_map, test_dataset, test_loader
         
         torch.cuda.empty_cache()
         gc.collect()
@@ -200,14 +200,17 @@ def train_epochs(config):
         
         if num == 0:
             prob_map_final = np.uint8(prob_map * np.float16(255)) // np.uint8(len(config.overlap))
-            del prob_map, depth_map
+            logger.info(f"Summed {num+1}º prediction. Overlap: {overlap}")
+            del prob_map
             
         else:
             prob_map_final += np.uint8(prob_map * np.float16(255)) // np.uint8(len(config.overlap))
-            del prob_map, depth_map
+            logger.info(f"First prediction. Overlap: {overlap}")
+            del prob_map
         
         gc.collect()
     
+    logger.info("All Predictions done")
     
     logger.info("Computing class with highest probability")
     pred_class_final = np.argmax(prob_map_final, axis=-1)
