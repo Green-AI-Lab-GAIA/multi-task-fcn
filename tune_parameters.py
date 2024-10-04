@@ -227,11 +227,10 @@ def train_epochs(config):
     
     logger.info("Save model")
     
-    folder_to_save = join(dirname(__file__), "results", f"model_{current_time_seconds}")
+    folder_to_save = join(dirname(__file__), "results", f"model_{metrics_test['avgF1']:06.1f}")
     check_folder(folder_to_save)
     
-    torch.save(model.state_dict(), 
-               join(folder_to_save, "model.pth"))
+    torch.save(model.state_dict(), join(folder_to_save, "model.pth"))
     
     save_yaml(dict(config), join(folder_to_save, "config.yaml"))
                
