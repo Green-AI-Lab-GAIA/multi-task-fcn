@@ -191,7 +191,7 @@ def train_epochs(config):
             activation_aux_layer = config.activation_aux_layer,    
         )
         
-        del pred_class
+        del pred_class, test_dataset, test_loader
         
         torch.cuda.empty_cache()
         gc.collect()
@@ -227,7 +227,7 @@ def train_epochs(config):
     
     logger.info("Save model")
     
-    folder_to_save = join(dirname(__file__), "results", f"model_{metrics_test['avgF1']:06.1f}")
+    folder_to_save = join(dirname(__file__), "results", f"model_f1{metrics_test['avgF1']:06.1f}")
     check_folder(folder_to_save)
     
     torch.save(model.state_dict(), join(folder_to_save, "model.pth"))
