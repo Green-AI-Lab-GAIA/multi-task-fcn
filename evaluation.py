@@ -27,56 +27,6 @@ ROOT_PATH = os.path.dirname(__file__)
 
 logger = getLogger("__main__")
         
-def define_test_loader(ortho_image:str, size_crops:int, overlap_rate:float)->Tuple:
-    """Define the PyTorch loader for evaluation.\\
-    This loader is different from the trainning loader.\\
-    Here, the loader gets patches from the entire image map.\\
-    On the other hand, the training loader just loads patches with some segmentation
-
-    Parameters
-    ----------
-    ortho_image : str
-        Path to the ortho_image. The image from remote sensing
-    size_crops : int
-        - The size of each patch    
-    overlap_rate : float
-        - The overlap rate between each patch
-
-    Returns
-    -------
-    Tuple
-        - image
-            The normalized image from remote sensing
-        - coords
-            The coordinate of the center of each patch
-        - stride
-            The size of each step between each patch center
-        - step_row
-        - step_col
-        - overlap
-            The real overlap in pixels
-    """
-
-    
-    
-    image = load_norm(ortho_image)
-
-    lab = np.ones(image.shape[1:])
-    lab[np.sum(image, axis=0) == (11*image.shape[0]) ] = 0
-    
-    image, stride, step_row, step_col, overlap, _, _ = add_padding_new(image, size_crops, overlap_rate)
-    
-    coords = extract_patches_coord(
-        img_gt = lab, 
-        psize = size_crops,
-        stride = stride, 
-        step_row = step_row,
-        step_col = step_col,
-        overl = overlap_rate
-    )
-
-    return image, coords, stride, overlap
-
 
 def predict_network(ortho_image_shape:Tuple, 
                     dataloader:torch.utils.data.DataLoader, 
