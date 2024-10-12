@@ -13,7 +13,7 @@ wandb.init(mode="disabled", project="test")
 args = load_args("args.yaml")
 
 # change for a small dataset
-args.data_path = "new_intersection_code_data"
+args.data_path = "test_code_data"
 args.note = "Debugging code"
 args.ortho_image = glob("16x_amazon_input_data/orthoimage/*.tif")[0]
 args.train_segmentation_path = glob("16x_amazon_input_data/segmentation/*train*.tif")[0]
