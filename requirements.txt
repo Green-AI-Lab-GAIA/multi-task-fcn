@@ -14,3 +14,4 @@ matplotlib
 rasterio
 torcheval
 millify
+pyarrow
