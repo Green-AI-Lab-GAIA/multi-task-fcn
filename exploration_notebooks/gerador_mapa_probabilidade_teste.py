@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[34]:
-
-
 import sys
+import time
+
+from joblib import Parallel, delayed
+
+
 
 sys.path.append("..")
 sys.path.append("../src")
@@ -36,20 +38,22 @@ from skimage.measure import find_contours, label
 from sklearn import metrics
 from tqdm import tqdm
 
-
 sys.path.append(dirname(dirname(__file__)))
 
+from src.io_operations import array2raster
+from evaluation import evaluate_iteration, evaluate_overlap, predict_network
 from pred2raster import pred2raster
 from sample_selection import get_components_stats
 from src.io_operations import (fix_relative_paths, get_image_metadata,
                                get_image_pixel_scale, load_args, read_tiff,
                                read_yaml)
-from evaluation import predict_network, evaluate_iteration, evaluate_overlap
 from utils import *
-
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 warnings.filterwarnings('ignore')
 import gc
+import logging
 import os
+import sys
 import textwrap
 from logging import Logger, getLogger
 from os.path import exists, join
@@ -77,14 +81,10 @@ from src.model import build_model, load_weights
 from src.utils import (add_padding_new, check_folder, extract_patches_coord,
                        get_crop_image, get_device, get_pad_width, normalize,
                        oversample)
-import logging
-import sys
 
 logger = getLogger("__main__")
 
-
-# In[35]:
-
+DEBUG_MODE = False
 
 FIG_PATH = join("figures")
 os.makedirs(FIG_PATH, exist_ok=True)
@@ -100,7 +100,7 @@ args = load_args(join(DATA_PATH, "args.yaml"))
 # Repo with training data
 INPUT_PATH = join(dirname(dirname(__file__)), "amazon_input_data")
 
-# In[36]:
+
 
 
 logger = logging.getLogger()
@@ -118,13 +118,8 @@ stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
 
 
-# In[37]:
-
 
 id_tree = pd.read_csv(join(INPUT_PATH,"id_trees.csv"), index_col="label_num")["tree_name"].sort_values()
-
-
-# In[38]:
 
 
 ORTHOIMAGE_PATH = args.ortho_image
@@ -266,12 +261,85 @@ class DatasetForInference(Dataset):
         return len(self.coords)
 
 
-# In[42]:
 
 
-from src.io_operations import array2raster
-from joblib import Parallel, delayed
-import time
+def predict_network(ortho_image_shape:Tuple, 
+                    dataloader:torch.utils.data.DataLoader, 
+                    model:nn.Module,
+                    num_classes:int,
+                    activation_aux_layer:Literal["sigmoid", "relu", "gelu"]="sigmoid",
+                    debug_mode=False):
+
+    pred_prob = np.zeros(shape = (ortho_image_shape[1], ortho_image_shape[2], num_classes),dtype='float16')
+    
+    pred_depth = np.zeros(shape = (ortho_image_shape[1], ortho_image_shape[2]), dtype='float16')
+    
+    count_image = np.zeros(shape = (ortho_image_shape[1], ortho_image_shape[2]), dtype='uint8')
+    
+    DEVICE = get_device()
+    model.eval()
+    
+    if activation_aux_layer == "sigmoid":
+        activation_aux_layer = nn.Sigmoid()
+    elif activation_aux_layer == "relu":
+        activation_aux_layer = nn.ReLU()
+    elif activation_aux_layer == "gelu":
+        activation_aux_layer = nn.GELU()
+    else:
+        raise ValueError("Activation function not recognized")
+
+    activation_aux_layer = activation_aux_layer.to(DEVICE)
+    
+    activation_main_layer = nn.Softmax(dim=1).to(DEVICE)
+    
+    with torch.no_grad(): 
+        for i, (image, slices) in enumerate(tqdm(dataloader)):      
+            # ============ multi-res forward passes ... ============
+            # compute model loss and output
+            input_batch = image.to(DEVICE, non_blocking=True, dtype = torch.float)
+            
+            out_pred = model(input_batch) 
+               
+            out_batch = activation_main_layer(out_pred['out'])
+            out_batch = out_batch.permute(0,2,3,1)
+            out_batch = out_batch.data.cpu().numpy()
+            
+            depth_out = activation_aux_layer(out_pred['aux']).data.cpu().numpy()
+            
+            batch_size, output_height, output_width, cl = out_batch.shape
+            
+            row_start, row_end, column_start, column_end = slices
+            
+            for b in range(batch_size):
+                                
+                pred_prob[
+                    row_start[b]:row_end[b],
+                    column_start[b]:column_end[b]
+                ] += out_batch[b]
+
+                pred_depth[
+                    row_start[b]:row_end[b],
+                    column_start[b]:column_end[b]
+                ] += depth_out[b][0]
+                
+                count_image[
+                    row_start[b]:row_end[b],
+                    column_start[b]:column_end[b]
+                ] += 1
+
+            if debug_mode and i > 2:
+                break
+                
+        # avoid zero division
+        count_image[count_image == 0] = 1
+        mask_division = count_image > 1
+        
+        logger.info("Dividing prob_map and depth_map by the number of times the pixel was predicted")
+        pred_prob[mask_division] = pred_prob[mask_division]/count_image[mask_division][:, None]
+        pred_depth[mask_division] = pred_depth[mask_division]/count_image[mask_division]
+        
+        del count_image
+        return pred_prob, pred_depth
 
 
 def evaluate_overlap(overlap:float,
@@ -323,14 +391,15 @@ def evaluate_overlap(overlap:float,
 
     cudnn.benchmark = True
 
-    prob_map, pred_class, depth_map = predict_network(
+    prob_map, depth_map = predict_network(
         ortho_image_shape = ortho_image_shape,
         dataloader = test_loader,
         model = model,
-        num_classes = args.nb_class
+        num_classes = args.nb_class,
+        debug_mode=DEBUG_MODE
     )
-    del pred_class, depth_map, test_dataset, test_loader
-    
+    del depth_map, test_dataset, test_loader
+    assert prob_map.max() > 0
     gc.collect()
     
     logger.info(f"Saving prediction outputs..")
@@ -338,7 +407,6 @@ def evaluate_overlap(overlap:float,
     return prob_map
 
 
-# In[43]:
 
 
 def evaluate_iteration(current_iter_folder:str, args:dict):
@@ -349,6 +417,9 @@ def evaluate_iteration(current_iter_folder:str, args:dict):
     
     logger.info("============ Initialized Evaluation ============")
     path_to_save = join(current_iter_folder, "prob_map_test.tif")
+    # change to npy file
+    path_to_save = path_to_save.replace(".tif", ".npy")
+    logger.info(f"Output will be saved to {path_to_save}")
     
     if exists(path_to_save):
         logger.info("Prediction already done. Skipping...")
@@ -377,24 +448,26 @@ def evaluate_iteration(current_iter_folder:str, args:dict):
         gc.collect()
         torch.cuda.empty_cache()
     
-    # prob_map divide by the number of overlaps, where the value is higher than 0
+    logger.info("Dividing prob_map by the number of overlaps")
     mask = (prob_map > 0)
     prob_map[mask] = (prob_map[mask] / len(args.overlap))*255
     prob_map = prob_map.astype("uint8")
-    assert prob_map.max() == 0
+    
+    # assert prob_map.max() > 0
+    
     logger.info("Summed all predictions")
     
     logger.info("Saving prediction outputs on disk")
-    array2raster(
-        path_to_save=path_to_save,
-        array=prob_map,
-        image_metadata=ortho_image_metadata,
-        dtype="uint8"
-    )
-    print("Saved to ", path_to_save)
+    # array2raster(
+    #     path_to_save=path_to_save,
+    #     array=prob_map,
+    #     image_metadata=ortho_image_metadata,
+    #     dtype="uint8"
+    # )
+    # save a npy file
+    np.save(path_to_save, prob_map)
+    logger.info(f"Saved to {path_to_save}")
 
-
-# In[44]:
 
 
 def get_iter_folders(output_folder):
@@ -430,14 +503,31 @@ for folder in important_folders:
 
 def evaluate_with_delay(iter_folder, args, num):
     # Wait for 10 minutes
-    time.sleep(6000*num)
+    time.sleep(600*num)
     evaluate_iteration(iter_folder, args)
+    
+
+for iter_folder in reversed(iter_folders):
+    evaluate_iteration(iter_folder, args)
+    if DEBUG_MODE:
+        break
+
+# with ThreadPoolExecutor(max_workers=10) as executor:
+#     for num, iter_folder in enumerate(iter_folders):
+#         executor.submit(evaluate_with_delay, iter_folder, args, num)
+
       
-from concurrent.futures import ProcessPoolExecutor
-with ProcessPoolExecutor(max_workers=3) as executor:
-    for num, iter_folder in enumerate(iter_folders):
-        executor.submit(evaluate_with_delay, iter_folder, args, num)
-        
+      
+# from concurrent.futures import ProcessPoolExecutor
+# with ProcessPoolExecutor(max_workers=3) as executor:
+#     for num, iter_folder in enumerate(iter_folders):
+#         executor.submit(evaluate_with_delay, iter_folder, args, num)
+
+# from concurrent.futures import ProcessPoolExecutor
+# with ProcessPoolExecutor(max_workers=3) as executor:
+#     for num, iter_folder in enumerate(iter_folders):
+#         executor.submit(evaluate_with_delay, iter_folder, args, num)
+
 print("All tasks submitted")
 
 
