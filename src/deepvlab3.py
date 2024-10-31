@@ -140,6 +140,7 @@ class DeepLabv3(nn.Module):
             check_folder(model_path)
             self.model = deeplabv3_resnet101(pretrained=self.pretrained,
                                             aux_loss=True)
+            torch.save(self.model, join(model_path, 'model'))
     
     def forward(self, x):
         
