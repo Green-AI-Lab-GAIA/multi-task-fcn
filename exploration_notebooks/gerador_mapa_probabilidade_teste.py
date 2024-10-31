@@ -452,9 +452,7 @@ def evaluate_iteration(current_iter_folder:str, args:dict):
     mask = (prob_map > 0)
     prob_map[mask] = (prob_map[mask] / len(args.overlap))*255
     prob_map = prob_map.astype("uint8")
-    
-    # assert prob_map.max() > 0
-    
+    assert prob_map.max() > 0
     logger.info("Summed all predictions")
     
     logger.info("Saving prediction outputs on disk")

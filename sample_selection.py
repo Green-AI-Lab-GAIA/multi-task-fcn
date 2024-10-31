@@ -607,7 +607,7 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
 
     logger.info("Getting the components that are in the old and new segmentation")
     # get the new predicted shapes for components from old segmentation
-    intersection_label_map = get_label_intersection2(old_label_img = old_selected_labels, 
+    intersection_label_map = get_label_intersection(old_label_img = old_selected_labels, 
                                                     new_label_img = new_labels_set)
     intersection_label_map = convert_to_minor_numeric_type(intersection_label_map)
 
