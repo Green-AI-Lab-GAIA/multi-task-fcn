@@ -93,7 +93,7 @@ def train_epochs(config):
         num_classes = config.nb_class,
         pretrained = config.pretrained,
         dropout_rate = config.dropout_rate,
-        batch_norm = config.batch_norm_layer,
+        batch_norm = config.batch_norm,
     )
     logger.info("Model built")
     print(config.weight_decay)
