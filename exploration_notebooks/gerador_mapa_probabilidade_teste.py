@@ -89,20 +89,6 @@ DEBUG_MODE = False
 FIG_PATH = join("figures")
 os.makedirs(FIG_PATH, exist_ok=True)
 
-
-
-# repo with model outputs
-VERSION_FOLDER = "13_amazon_data"
-DATA_PATH = join(dirname(dirname(__file__)), VERSION_FOLDER)
-
-# load args from the version
-args = load_args(join(DATA_PATH, "args.yaml"))
-# Repo with training data
-INPUT_PATH = join(dirname(dirname(__file__)), "amazon_input_data")
-
-
-
-
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)  # Set the logging level to DEBUG to capture all messages
 
@@ -116,36 +102,6 @@ stream_handler.setFormatter(formatter)
 
 # Add the handler to the logger
 logger.addHandler(stream_handler)
-
-
-
-id_tree = pd.read_csv(join(INPUT_PATH,"id_trees.csv"), index_col="label_num")["tree_name"].sort_values()
-
-
-ORTHOIMAGE_PATH = args.ortho_image
-OVERLAPS = args.overlap
-
-
-# In[39]:
-
-
-TRAIN_GT = read_tiff(args.train_segmentation_path)
-# COMP_TRAIN_GT = label(TRAIN_GT)
-
-
-# In[40]:
-
-
-TEST_GT = read_tiff(args.test_segmentation_path)
-# Data from TRAIN in TEST
-# TEST_GT = np.where(TRAIN_GT>0, 0, TEST_GT)
-# COMP_TEST_GT = label(TEST_GT)
-
-
-# # Modificando o Dataset for Inference para considerar uma máscara de segmentação
-
-# In[41]:
-
 
 class DatasetForInference(Dataset):
     def __init__(self,
@@ -481,52 +437,47 @@ def get_iter_folders(output_folder):
 
 
 
-# In[45]:
+if __name__ == "__main__":
+    
+    # repo with model outputs
+    VERSION_FOLDER = "13_amazon_data"
+    DATA_PATH = join(dirname(dirname(__file__)), VERSION_FOLDER)
 
+    # load args from the version
+    args = load_args(join(DATA_PATH, "args.yaml"))
+    # Repo with training data
+    INPUT_PATH = join(dirname(dirname(__file__)), "amazon_input_data")
 
-iter_folders = get_iter_folders(DATA_PATH)
+    id_tree = pd.read_csv(join(INPUT_PATH,"id_trees.csv"), index_col="label_num")["tree_name"].sort_values()
+    
+    args.ortho_image = join(INPUT_PATH, "orthoimage/orthoimage.tif")
+    ORTHOIMAGE_PATH = args.ortho_image
+    
+    OVERLAPS = args.overlap
 
-
-# In[14]:
-important_folders = ["/home/luiz.luz/multi-task-fcn/13_amazon_data/iter_020",
-                     "/home/luiz.luz/multi-task-fcn/13_amazon_data/iter_008",
-                     "/home/luiz.luz/multi-task-fcn/13_amazon_data/iter_001"]
-
-# set the important folders as priority in iter_folders
-for folder in important_folders:
-    iter_folders.remove(folder)
-    iter_folders.insert(0, folder)
-
-
-
-def evaluate_with_delay(iter_folder, args, num):
-    # Wait for 10 minutes
-    time.sleep(600*num)
-    evaluate_iteration(iter_folder, args)
+    TRAIN_GT = read_tiff(join(INPUT_PATH,"segmentation/train_set.tif"))
+    TEST_GT = read_tiff(join(INPUT_PATH,"segmentation/test_set.tif"))
     
 
-for iter_folder in reversed(iter_folders):
-    evaluate_iteration(iter_folder, args)
-    if DEBUG_MODE:
-        break
+    iter_folders = get_iter_folders(DATA_PATH)
 
-# with ThreadPoolExecutor(max_workers=10) as executor:
-#     for num, iter_folder in enumerate(iter_folders):
-#         executor.submit(evaluate_with_delay, iter_folder, args, num)
+    important_folders = [join(DATA_PATH, "iter_020"),
+                        join(DATA_PATH, "iter_008"),
+                        join(DATA_PATH, "iter_001")]
 
-      
-      
-# from concurrent.futures import ProcessPoolExecutor
-# with ProcessPoolExecutor(max_workers=3) as executor:
-#     for num, iter_folder in enumerate(iter_folders):
-#         executor.submit(evaluate_with_delay, iter_folder, args, num)
+    # set the important folders as priority in iter_folders
+    for folder in important_folders:
+        iter_folders.remove(folder)
+        iter_folders.insert(0, folder)
+        
 
-# from concurrent.futures import ProcessPoolExecutor
-# with ProcessPoolExecutor(max_workers=3) as executor:
-#     for num, iter_folder in enumerate(iter_folders):
-#         executor.submit(evaluate_with_delay, iter_folder, args, num)
+    for iter_folder in iter_folders:
+        evaluate_iteration(iter_folder, args)
+        if DEBUG_MODE:
+            break
 
-print("All tasks submitted")
+
+    print("All tasks submitted")
 
 
 
