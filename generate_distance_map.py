@@ -82,22 +82,19 @@ def generate_distance_map(input_image_path:str, output_image_path:str, sigma:int
     input_img = read_tiff(input_image_path).astype('uint16')
     
     output_img = apply_gaussian_distance_map(input_img, sigma)
-
+    
+    output_img[output_img<0.05] = 0
     
     array2raster(output_image_path, output_img, img_metadata, "float32")
 
 
 if __name__ == "__main__":
-    from src.utils import load_args    
     
-    args = load_args("args.yaml")
-    
-    train_input_path = os.path.join(args.data_path, args.train_segmentation_path)
-    
-    train_output_path = os.path.join(args.data_path, "iter_000" ,"train_distance_map.tif")
-    
-    check_folder(os.path.dirname(train_output_path))
 
+    train_input_path = "2x_amazon_input_data/segmentation/train_set.tif"
+    train_output_path = "2x_amazon_input_data/distance_map/train_distance_map.tif"
+    check_folder(os.path.dirname(train_output_path))
+    
     generate_distance_map(train_input_path, train_output_path)
     
     print_sucess("Distance map generated successfully")

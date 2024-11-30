@@ -5,35 +5,35 @@
 model_dir: exp_deeplab_v4
 checkpoint_file: checkpoint.pth.tar
 
-data_path: "test_data"
+data_path: "13_amazon_data"
 
-note: "Runnnig the model with data from Santa Catarina"
+note: "Usando mais opções de overlap com [0.1, 0.5]. Aumentando o tamanho do sigma aplicado as imagens"
 
 # Input data for the model
-ortho_image: input_data/orthoimage/fixed_ortoA1_25tiff.tif
-train_segmentation_path: input_data/segmentation/train_set.tif
-test_segmentation_path: input_data/segmentation/test_set.tif
-mask_path: input_data/mask.tif
+ortho_image: "amazon_input_data/orthoimage/NOV_2017_FINAL_004.tif"
+train_segmentation_path: "amazon_input_data/segmentation/train_set.tif"
+test_segmentation_path: "amazon_input_data/segmentation/test_set.tif"
+full_segmentation_path: "amazon_input_data/segmentation/full_set.tif"
+mask_path: "amazon_input_data/mask.tif"
 
+# You can use the 'test', 'train' or 'full' set as validation set
+validation_set: "train"
 
 ################################# 
 ###### TRAINING parameters ######
-
+downsampling_factor: None
 # num samples per epoch
-samples: 100
+samples: 2500
 # True for data augmentation during training
 augment: True
-
-# convnet architecture --> 'resunet','deeplabv3_resnet50',deeplabv3+_resnet9, deeplabv3+
+copy_and_paste_augmentation: False
+# convnet architecture --> 'resunet','deeplabv3_resnet50','deeplabv3+_resnet9', deeplabv3+
 arch: deeplabv3_resnet50
 # True for load pretrained weights from Imagenet
 is_pretrained: True
-
+batch_norm: False
 # Dropout rate for deepvlab clasisfication traning
-dropout_rate: 0.65
-
-# Filter for the ResUnet for trained from scratch
-filters: [32, 32, 32, 32]
+dropout_rate: 0.5
 
 # regularization weight of distance map
 lambda_weight: 1
@@ -42,7 +42,8 @@ lambda_weight: 1
 # number of total epochs to run
 epochs: 30
 # batch size per gpu, i.e. how many unique instances per gpu
-batch_size: 32
+batch_size: 16
+
 # base learning rate
 base_lr: 0.01
 # final learning rate
@@ -58,7 +59,7 @@ weight_decay: 1e-06
 
 ### others parameters ###
 # number of data loading workers
-workers: 12
+workers: 24
 # random seed
 seed: 3115
 
@@ -68,11 +69,11 @@ seed: 3115
 ###############################
 
 # True for training 4 disjoint regions
-size_crops: 256
+size_crops: 512
 # Número de classes
-nb_class: 14
+nb_class: 17
 # samples per epoch
-overlap: [0.1, 0.3, 0.5]
+overlap: [0.1, 0.5]
 
 
 ################################
@@ -80,19 +81,20 @@ overlap: [0.1, 0.3, 0.5]
 ################################
 
 # probability and distance map thershold to filter new components
-prob_thr: 0.9
-depth_thr: 0.2
+prob_thr: 0.7
+depth_thr: 0.1
 # Num of iter
-num_iter : 20
+num_iter : 22
 
-lower_limit_area: 500
+lower_limit_area: 25_000
 upper_limit_area: "inf"
 
 lower_limit_area_rlted_to_tree_type: -0.3
 upper_limit_area_rlted_to_tree_type: 0.7
+lower_limit_solidity_rlted_to_tree_type: -0.5
 
 # Availables scales: "log", None
-scale_area: "log"
+scale_area: None
 
 # Sigma value for gaussian filter in distance map
-sigma : 5
+sigma : 30

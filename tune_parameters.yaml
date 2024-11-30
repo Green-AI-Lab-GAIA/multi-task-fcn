@@ -1,0 +1,60 @@
+method: random
+name: tune_parameters
+metric:
+  name: f1_score
+  goal: maximize
+parameters:
+  activation_aux_layer:
+    values: ["sigmoid", "relu", "gelu"]
+  early_stopping_threshold:
+    values: [0.001, 0.01, 0.1]
+  overlap:
+    values: [[0.1, 0.3],[0.3,0.5],[0.1, 0.5]]
+  copy_and_paste_augmentation:
+    values: [true, false]
+  dropout_rate:
+    values: [0.1, 0.3, 0.5, 0.7, 0.9]
+  size_crops:
+    value: 512
+  batch_norm_layer:
+    values: [true, false]
+  lambda_weight:
+    values: [0.5, 1, 2]
+  pretrained:
+    values: [true, false]
+  standardize:
+    value: true
+  augment:
+    value: true
+  samples:
+    value: 2500
+  batch_size:
+    value: 10
+  nb_class:
+    value: 17
+  arch:
+    value: deeplabv3_resnet50
+  base_lr:
+    value: 0.01
+  final_lr:
+    value: 0.0001
+  weight_decay:
+    value: 0.000001
+  warmup_epochs:
+    value: 5
+  start_warmup:
+    value: 0
+  epochs:
+    value: 30
+  patience:
+    value: 5
+  num_workers:
+    value: 8
+  orthoimage_path:
+    value: "amazon_input_data/orthoimage/orthoimage.tif"
+  distance_map_path:
+    value: "amazon_input_data/distance_map/train_distance_map.tif"
+  segmentation_path:
+    value: "amazon_input_data/segmentation/train_set.tif"
+  ground_truth_test_path:
+    value: "amazon_input_data/segmentation/test_set.tif"

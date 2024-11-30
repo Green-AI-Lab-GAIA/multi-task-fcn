@@ -10,190 +10,67 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torcheval.metrics import MulticlassF1Score
 from tqdm import tqdm
 
 ROOT_PATH = dirname(dirname(__file__))
 sys.path.append(ROOT_PATH)
-
+from src.deepvlab3 import DeepLabv3
 from src.deepvlab3plus import DeepLabv3_plus
 from src.deepvlab3plus_resnet9 import DeepLabv3Plus_resnet9
 from src.metrics import evaluate_f1, evaluate_metrics
-from src.resnet import ResUnet
 from src.utils import (AverageMeter, check_folder, get_device, plot_figures)
 from src.io_operations import load_norm, read_yaml
-
+import wandb
 args = read_yaml(join(ROOT_PATH, "args.yaml"))
 
 logger = getLogger("__main__")
 
 
-def define_loader(orto_img:str, gt_lab:np.ndarray, size_crops:int, test=False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Define how the image will be loaded to the model
-
-    Parameters
-    ----------
-    orto_img : str
-        The file path to the map image. The image was generated from remote sensing
-    gt_lab : np.ndarray
-        The 2D array with segmentation labels
-    size_crops : int
-        The borders from the image to cut
-    test : bool, optional
-        Define if it is loaded for testing, by default False
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-        - image :  np.ndarray
-            The image from remote sensing with shape [row, col, bands]
-        - coords : np.ndarray
-            The positions in the image where the values are different of 0.
-        - gt_lab : 
-            The segmentation image with borders removed
-        - gt_lab[gt_lab!=0]
-            The position where the segmentation is different of 0.
-    """
-
-    if not test:
-        image = load_norm(orto_img)
-    
-    gt_lab[:size_crops,:] = 0
-    gt_lab[-size_crops:,:] = 0
-    gt_lab[:,:size_crops] = 0
-    gt_lab[:,-size_crops:] = 0
-
-    coords = np.where(gt_lab!=0)
-    coords = np.array(coords)
-    coords = np.rollaxis(coords, 1, 0)
-
-    if test:
-        return None, coords, gt_lab, gt_lab[gt_lab!=0]
-    
-    return image, coords, gt_lab, gt_lab[gt_lab!=0]
-
-
-def build_model(image_shape:list, 
+def build_model(in_channels:list, 
                 num_classes:int, 
-                arch:Literal["resunet", "deeplabv3_resnet50", "deeplabv3+", "deeplabv3+_resnet9"], 
-                filters:list, 
+                arch:Literal["deeplabv3_resnet50","deeplabv3_resnet101","deeplabv3+_resnet34","deeplabv3+_resnet18","deeplabv3+_resnet10", "deeplabv3+_resnet9"], 
                 pretrained:bool, 
                 psize:int,
-                dropout_rate:float)->nn.Module:
-    """Build model according to architecture
-    The architecture can be 'resunet' or 'deeplabv3_resnet50'
-    The model can be either pretrained or randomly initialized
-
-    Parameters
-    ----------
-    image_shape : list
-        List with the shape of the input image.
-    num_classes : int
-        Num of unique classes in the dataset
-    arch : str
-        Architecture name to build the model
-        The architecture can be 'resunet' or 'deeplabv3_resnet50'
-    filters : list
-        List of number of filters for each block of the model, if the model is resunet
-    pretrained : bool
-        If True, the model is loaded from pretrained weights available in pytorch hub
-    psize : int
-        Patch size
-    dropout_rate : float
-        Dropout rate for classification task
-
-    Returns
-    -------
-    nn.Module
-        Pytorch model with the specified architecture
-    """
+                dropout_rate:float,
+                batch_norm:bool,
+                **kwargs)->nn.Module:
 
 
     # build model
-    if arch == 'resunet':    # trained ResUnet from scratch
-        model = ResUnet(
-            channel=image_shape[0], 
-            nb_classes = num_classes, 
-            filters=filters)
-
-    # build model
-    elif arch == "deeplabv3_resnet50":
-
-        # use deeplabv3_resnet50 pretrained or randomly initialized
-        if pretrained:
-            # If is pretrained, the model is loaded from pretrained_models folder.
-            # the weights model were downloaded from pytorch hub
-            model_path = os.path.join(ROOT_PATH, 'pretrained_models', arch)
-
-        else:
-            # If is not pretrained, doesnt download/load model with pretrained weights
-            model_path = os.path.join(ROOT_PATH, 'random_w_models', arch)
-
-
-        if os.path.isdir(model_path):
-            model_file = os.listdir(model_path)
-            model = torch.load(os.path.join(model_path, model_file[0]))
-
-
-        else:
-            # If doesnt have the model, download from pytorch hub
-            check_folder(model_path)
-            
-            if pretrained:
-                weights = "DeepLabV3_ResNet50_Weights.COCO_WITH_VOC_LABELS_V1"
-
-            else:
-                weights = None
-
-            model = torch.hub.load('pytorch/vision:v0.10.0', 
-                                    arch, 
-                                    weights = weights,
-                                    pretrained = pretrained,
-                                    aux_loss = True)
-            
-            torch.save(model, os.path.join(model_path,'model'))
-        
-
-        # modify initial conv and classfiers to the input image shape and num of classes
-        model.backbone.conv1 = nn.Conv2d(
-            in_channels = image_shape[0],
-            out_channels= 64, 
-            kernel_size=(7, 7), 
-            stride=(2, 2), 
-            padding=(3, 3), 
-            bias=False
-        )
-
-        # Adding an auxiliar classifier for distance map task
-        model.aux_classifier[4] = nn.Conv2d(
-            in_channels = 256, 
-            out_channels = 1, 
-            kernel_size=(1, 1), 
-            stride=(1, 1)
-        )
-        
-        # modify classifier to the num of classes
-        model.classifier[4] = nn.Sequential(
-            nn.Dropout(p = dropout_rate),
-            nn.Conv2d(
-                in_channels = 256, 
-                out_channels = num_classes, 
-                kernel_size=(1, 1), 
-                stride=(1, 1)
-            )
+    if arch == "deeplabv3_resnet50":
+        model = DeepLabv3(
+            in_channels = in_channels,
+            num_classes = num_classes, 
+            pretrained = pretrained, 
+            dropout_rate = dropout_rate,
+            batch_norm = batch_norm
         )
     
-    elif arch == "deeplabv3+":
+    elif arch == "deeplabv3_resnet101":
+        model = DeepLabv3(
+            in_channels = in_channels,
+            num_classes = num_classes, 
+            pretrained = pretrained, 
+            dropout_rate = dropout_rate,
+            batch_norm = batch_norm,
+            resnet_arch = "resnet101"
+        )
+
+    elif arch.startswith("deeplabv3+"):
+        # get resnet_depth
+        resnet_depth = int(arch.split("resnet")[-1])
         model = DeepLabv3_plus(
-            model_depth = 10,
+            model_depth = resnet_depth,
             nb_class = num_classes,
-            num_ch_1 = image_shape[0],
+            num_ch_1 = in_channels,
             psize = psize
         )
 
 
     elif arch == "deeplabv3+_resnet9":
         model = DeepLabv3Plus_resnet9(
-            num_ch = image_shape[0],
+            num_ch = in_channels,
             num_class = num_classes,
             psize = psize
         )
@@ -224,7 +101,7 @@ def load_weights(model: nn.Module, checkpoint_file_path:str)-> nn.Module:
     # load weights
     if os.path.isfile(checkpoint_file_path):
 
-        state_dict = torch.load(checkpoint_file_path, map_location=DEVICE)
+        state_dict = torch.load(checkpoint_file_path, map_location=DEVICE, weights_only=False)
 
         if "state_dict" in state_dict:
             state_dict = state_dict["state_dict"]
@@ -298,9 +175,9 @@ def train(train_loader:torch.utils.data.DataLoader,
           optimizer:torch.optim.Optimizer, 
           epoch:int, 
           lr_schedule:np.ndarray, 
-          lambda_weight:float, 
-          figures_path:str,
-          batch_norm_layer:bool = False):
+          lambda_weight:float,
+          activation_aux_layer:Literal["sigmoid", "relu", "gelu"] = "sigmoid",
+          figures_path:str=None):
     """Train model for one epoch
 
     Parameters
@@ -319,8 +196,6 @@ def train(train_loader:torch.utils.data.DataLoader,
         Weight for the auxiliary task
     figures_path : str
         Path to save sample figures 
-    batch_norm_layer : bool, optional
-        If True, apply batch normalization to the input image, by default False
 
     Returns
     -------
@@ -330,12 +205,25 @@ def train(train_loader:torch.utils.data.DataLoader,
     DEVICE = get_device()
 
     model.train()
+    model.to(DEVICE)
+    
     loss_avg = AverageMeter()
+    
+    if activation_aux_layer == "sigmoid":
+        activation_aux_module = nn.Sigmoid().to(DEVICE)
+    
+    elif activation_aux_layer == "relu":
+        activation_aux_module = nn.ReLU().to(DEVICE)
+        
+    elif activation_aux_layer == "gelu":
+        activation_aux_module = nn.GELU().to(DEVICE)
+    
+    else:
+        raise ValueError(f"Unknown activation function {activation_aux_layer}")
     
     # define functions
     soft = nn.Softmax(dim=1).to(DEVICE)
-    sig = nn.Sigmoid().to(DEVICE)   
-
+    
     # define losses
     # criterion = nn.NLLLoss(reduction='none').cuda()
     aux_criterion = nn.MSELoss(reduction='none').to(DEVICE)
@@ -353,8 +241,6 @@ def train(train_loader:torch.utils.data.DataLoader,
         depth = depth.to(DEVICE, non_blocking=True)
         ref = ref.to(DEVICE, non_blocking=True)
 
-        if batch_norm_layer:
-            inp_img = F.batch_norm(inp_img, inp_img.mean(axis=(0,2,3)), torch.var(inp_img, axis=(0,2,3)))
 
         # create mask for the unknown pixels
         mask = torch.where(ref == 0, torch.tensor(0.0), torch.tensor(1.0))
@@ -365,10 +251,11 @@ def train(train_loader:torch.utils.data.DataLoader,
         
         # Foward Passs
         out_batch = model(inp_img)
+        depht_out = activation_aux_module(out_batch['aux'][:,0,:,:])
         
         loss1 = mask*categorical_focal_loss(out_batch["out"], ref_copy)
 
-        loss2 = mask*aux_criterion(sig(out_batch['aux'])[:,0,:,:], depth)
+        loss2 = mask*aux_criterion(depht_out, depth)
         
         loss = (loss1 + lambda_weight*loss2)/2 
         loss = torch.sum(loss)/torch.sum(ref>0)
@@ -383,6 +270,8 @@ def train(train_loader:torch.utils.data.DataLoader,
         # update the average loss
         loss_avg.update(loss)
 
+        wandb.log({"train/loss": loss})
+        
         gc.collect()
 
         # Evaluate summaries only once in a while
@@ -402,14 +291,14 @@ def train(train_loader:torch.utils.data.DataLoader,
             )
             logger.info(f"Accuracy:{summary_batch['Accuracy']}, avgF1:{summary_batch['avgF1']}")
             
-        if it == 0:
+        if it == 0 and figures_path is not None:
             # plot samples results for visual inspection
             with torch.no_grad():
                 plot_figures(inp_img, 
                             ref, 
                             soft(out_batch['out']),
                             depth,
-                            sig(out_batch['aux']),
+                            depht_out,
                             figures_path,
                             epoch,
                             'train')
@@ -441,33 +330,34 @@ def eval(val_loader:torch.utils.data.DataLoader,
 
     DEVICE = get_device()
 
-    f1_avg = AverageMeter()
+    f1_avg = MulticlassF1Score(num_classes=args.nb_class, average="macro", device=DEVICE)
+    f1_by_class_avg = MulticlassF1Score(num_classes=args.nb_class, average=None, device=DEVICE)
     
-    f1_by_class_avg = AverageMeter()
-
     soft = nn.Softmax(dim=1).to(DEVICE)
 
     with torch.no_grad():
 
         for (inp_img, depth, ref) in tqdm(val_loader):
 
-            # ============ forward pass and loss ... ============
-            # compute model loss and output
             inp_img = inp_img.to(DEVICE, non_blocking=True)
-
-            # Foward Passs
+            
             out_batch = model(inp_img)
             
             out_prob = soft(out_batch['out'])
             
-            f1_macro = evaluate_f1(out_prob, ref, average="macro")
-            f1_avg.update(f1_macro)
+            mask = (ref > 0)
             
-            f1_by_class = evaluate_f1(out_prob, ref, average=None)
-            f1_by_class_avg.update(f1_by_class)
+            ref_masked = ref[mask]
+            ref_masked = ref_masked - 1
             
+            pred_class = torch.argmax(out_prob, dim=1)
+            pred_class_masked = pred_class[mask]
+            
+            f1_avg.update(pred_class_masked, ref_masked)
+            f1_by_class_avg.update(pred_class_masked, ref_masked)
+         
 
-    return f1_avg.avg, f1_by_class_avg.avg
+    return f1_avg.compute().cpu().item(), f1_by_class_avg.compute().cpu().numpy()
 
 
 

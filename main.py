@@ -1,9 +1,10 @@
+import argparse
 import gc
 import math
 import os
 import shutil
-from os.path import dirname, exists, isfile, join
 from multiprocessing import Process
+from os.path import abspath, dirname, exists, isfile, join
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,24 +14,26 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.parallel
 import torch.optim
+from skimage.measure import label
 from tqdm import tqdm
 
+import wandb
 from evaluation import evaluate_iteration
 from generate_distance_map import generate_distance_map
 from pred2raster import pred2raster
-from sample_selection import get_new_segmentation_sample
+from sample_selection import get_components_stats, get_new_segmentation_sample
+from src.dataset import DatasetFromCoord
+from src.deepvlab3 import DeepLabv3
 from src.io_operations import (ParquetUpdater, array2raster,
-                               convert_tiff_to_npy, get_image_metadata,
-                               get_npy_filepath_from_tiff, load_args,
+                               get_image_metadata,
+                               load_args,
                                read_tiff, save_yaml)
-from src.lazy_dataset import LazyDatasetFromCoord
 from src.logger import create_logger
 from src.metrics import evaluate_component_metrics, evaluate_metrics
-from src.model import (build_model, define_loader, eval, load_weights,
-                       save_checkpoint, train)
-from src.dataset import DatasetFromCoord
-from src.utils import (check_folder, fix_random_seeds, get_device, oversamp,
-                       print_sucess, restart_from_checkpoint, restore_checkpoint_variables)
+from src.model import eval, load_weights, save_checkpoint, train, build_model
+from src.utils import (check_folder, fix_random_seeds, from_255_to_1,
+                       get_device, print_sucess,
+                       restart_from_checkpoint, restore_checkpoint_variables)
 from visualization import generate_labels_view
 
 gc.set_threshold(0)
@@ -126,7 +129,7 @@ def get_current_iter_folder(data_path, overlap):
 
             return next_iter_path
     
-    if is_iter_0_done(args.data_path):
+    if is_iter_0_done(data_path):
         return join(data_path, f"iter_{1:03d}")
 
 
@@ -286,6 +289,7 @@ def train_epochs(last_checkpoint:str,
                  count_early:int,
                  val_loader:torch.utils.data.DataLoader,
                  current_iter_folder:str,
+                 lambda_weight:float,
                  patience:int=5,
                  ):
     """Train the model with the specified epochs numbers
@@ -316,8 +320,9 @@ def train_epochs(last_checkpoint:str,
         The limit of the count early variable, by default 5
     """
     current_iter = int(current_iter_folder.split("iter_")[-1])
-
-    training_stats = ParquetUpdater(join(args.data_path, "training_stats.parquet"))
+    data_path = abspath(dirname(current_iter_folder))
+    
+    training_stats = ParquetUpdater(join(data_path, "training_stats.parquet"))
 
     # Create figures folder to save training figures every epochsaved.
     figures_path = join(dirname(last_checkpoint), 'figures')
@@ -337,14 +342,16 @@ def train_epochs(last_checkpoint:str,
         logger.info("============ Starting epoch %i ... ============" % epoch)
 
         # train the network
+        logger.info("Training the model...")
         epoch, scores_tr = train(train_loader=train_loader, 
                                  model=model, 
                                  optimizer=optimizer, 
                                  epoch=epoch, 
                                  lr_schedule=lr_schedule, 
                                  figures_path=figures_path, 
-                                 lambda_weight=args.lambda_weight)
+                                 lambda_weight=lambda_weight)
         
+        logger.info("Evaluating the model...")
         f1_avg, f1_by_class_avg = eval(val_loader, model)
         
         ### Save training stats ####
@@ -353,9 +360,12 @@ def train_epochs(last_checkpoint:str,
         eval_data["epoch"] = epoch
         eval_data["iter"] = current_iter
         
+        wandb.log({"train_loss": scores_tr,
+                   "f1_avg": f1_avg,
+                   "f1_by_class_avg": f1_by_class_avg
+        })
         training_stats.update(eval_data)
 
-        gc.collect()
         
         logger.info("scores_tr: {}".format(f1_avg))
 
@@ -431,17 +441,32 @@ def train_iteration(current_iter_folder:str, args:dict):
 
     segmentation_path = get_last_segmentation_path(args.train_segmentation_path, current_iter_folder)
     distance_map_path = get_last_distance_map_path(current_iter_folder)
-            
+    
+    if args.validation_set == "train":
+        val_segmentation_path = segmentation_path
+        val_distance_map_path = distance_map_path
+    
+    elif args.validation_set == "test":
+        val_segmentation_path = args.test_segmentation_path
+        val_distance_map_path = join(args.data_path, f"iter_000", "distance_map", "test_distance_map.tif")
+    
+    elif args.validation_set == "full":
+        val_segmentation_path = args.full_segmentation_path
+        val_distance_map_path = join(args.data_path, f"iter_000", "distance_map", "full_distance_map.tif")
+        
+    else:
+        raise ValueError("validation_set must be 'train', 'test' or 'full'")
 
     train_dataset = DatasetFromCoord(
         image_path=args.ortho_image,
         segmentation_path=segmentation_path,
         distance_map_path=distance_map_path,
-        dataset_type="train",
         samples=args.samples,
         augment=args.augment,
-        crop_size=args.size_crops
+        crop_size=args.size_crops,
+        copy_paste_augmentation=args.copy_and_paste_augmentation
     )
+    
     train_dataset.standardize_image_channels()
     
     train_loader = torch.utils.data.DataLoader(
@@ -457,12 +482,12 @@ def train_iteration(current_iter_folder:str, args:dict):
     # LOAD VALIDATION SET
     val_dataset = DatasetFromCoord(
         image_path=args.ortho_image,
-        segmentation_path=segmentation_path,
-        distance_map_path=distance_map_path,
-        dataset_type="val",
-        samples=args.samples//5,
+        segmentation_path=val_segmentation_path,
+        distance_map_path=val_distance_map_path,
+        samples=args.samples//3,
         augment=args.augment,
-        crop_size=args.size_crops
+        crop_size=args.size_crops,
+        copy_paste_augmentation=False
     )
     val_dataset.standardize_image_channels()
 
@@ -478,17 +503,15 @@ def train_iteration(current_iter_folder:str, args:dict):
     logger.info("Building data done with {} images loaded.".format(len(train_loader)))
 
     orthoimage_meta = get_image_metadata(args.ortho_image)
-
-    model  = build_model(
-        (orthoimage_meta["count"], orthoimage_meta["height"], orthoimage_meta["width"]),
-        args.nb_class,  
-        args.arch, 
-        args.filters, 
-        args.is_pretrained,
-        psize = args.size_crops,
-        dropout_rate = args.dropout_rate
+    model = build_model(
+        in_channels=orthoimage_meta["count"],
+        num_classes=args.nb_class,
+        arch=args.arch,
+        dropout_rate=args.dropout_rate,
+        batch_norm=args.batch_norm,
+        pretrained=args.is_pretrained,
+        psize=args.size_crops,
     )
-
 
     logger.info("Building model done.")
 
@@ -563,7 +586,8 @@ def train_iteration(current_iter_folder:str, args:dict):
                      lr_schedule, 
                      to_restore["count_early"],
                      val_loader = val_loader,
-                     current_iter_folder = current_iter_folder)
+                     current_iter_folder = current_iter_folder,
+                     lambda_weight=args.lambda_weight)
     gc.collect()
 
 
@@ -616,9 +640,12 @@ def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
 
     NEW_PROB_FILE = join(current_iter_folder, "raster_prediction", f'join_prob_{np.sum(args.overlap)}.TIF')
     new_prob_map = read_tiff(NEW_PROB_FILE)
+    new_prob_map = from_255_to_1(new_prob_map)
 
     NEW_DEPTH_FILE = join(current_iter_folder, "raster_prediction", f'depth_{np.sum(args.overlap)}.TIF')
     new_depth_map = read_tiff(NEW_DEPTH_FILE)
+    new_depth_map = from_255_to_1(new_depth_map)
+    
 
 
     if current_iter == 1:
@@ -644,7 +671,9 @@ def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
         new_prob_map = new_prob_map, 
         new_depth_map = new_depth_map,
         prob_thr = args.prob_thr,
-        depth_thr = args.depth_thr
+        depth_thr = args.depth_thr,
+        sigma=args.sigma,
+        args=args
     )
 
     ##### SAVE NEW LABELS ####
@@ -659,9 +688,44 @@ def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
 
     array2raster(SELECTED_LABELS_OUTPUT_PATH, selected_labels_set, image_metadata, "Byte")
     
+def generate_distance_map_for_first_iteration(current_iter_folder:str, args:dict):
+    
+    logger.info(f"============ Generating Distance Map ============")
 
+    TEST_SEGMENTATION_PATH = args.test_segmentation_path
+    TEST_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "test_distance_map.tif")
+    check_folder(dirname(TEST_DISTANCE_MAP_OUTPUT))
 
-def generate_distance_map_for_next_iteration(current_iter_folder):
+    logger.info(f"Generating train distance map")
+    TRAIN_SEGMENTATION_PATH  = args.train_segmentation_path
+    TRAIN_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "train_distance_map.tif")
+    check_folder(dirname(TRAIN_DISTANCE_MAP_OUTPUT))
+    
+    FULL_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "full_distance_map.tif")
+
+    # Create processes for test and train distance map generation
+    test_process = Process(target=generate_distance_map, args=(TEST_SEGMENTATION_PATH, TEST_DISTANCE_MAP_OUTPUT, args.sigma))
+    train_process = Process(target=generate_distance_map, args=(TRAIN_SEGMENTATION_PATH, TRAIN_DISTANCE_MAP_OUTPUT, args.sigma))
+    
+    # Start the processes
+    test_process.start()
+    train_process.start()
+    
+    # Wait for both processes to finish
+    test_process.join()
+    train_process.join()
+
+    test_distance_map = read_tiff(TEST_DISTANCE_MAP_OUTPUT)
+    train_distance_map = read_tiff(TRAIN_DISTANCE_MAP_OUTPUT)
+    
+    train_metadata = get_image_metadata(TRAIN_SEGMENTATION_PATH)
+
+    full_distance_map = np.maximum(test_distance_map, train_distance_map)
+    array2raster(FULL_DISTANCE_MAP_OUTPUT, full_distance_map, train_metadata, "float32")
+
+            
+
+def generate_distance_map_for_next_iteration(current_iter_folder, args:dict):
 
     ALL_LABELS_PATH = join(current_iter_folder, "new_labels", f'all_labels_set.tif')
     SELECTED_LABELS_PATH = join(current_iter_folder, "new_labels", f'selected_labels_set.tif')
@@ -691,9 +755,14 @@ def generate_distance_map_for_next_iteration(current_iter_folder):
 
 
 def compile_metrics(current_iter_folder, args):
-    # read test segmentation 
-    DATA_PATH = dirname(current_iter_folder)
+    
+    METRICS_TEST_PATH = join(current_iter_folder, "test_metrics.yaml")
+    METRICS_TRAIN_PATH = join(current_iter_folder, "train_metrics.yaml")
+    
+    if exists(METRICS_TEST_PATH) and exists(METRICS_TRAIN_PATH):
+        return
 
+    logger.info("============ Compiling Metrics ============")
     GROUND_TRUTH_TEST_PATH = args.test_segmentation_path
     ground_truth_test = read_tiff(GROUND_TRUTH_TEST_PATH)
 
@@ -705,24 +774,54 @@ def compile_metrics(current_iter_folder, args):
 
     ### Save test metrics ###
     metrics_test = evaluate_metrics(predicted_seg, ground_truth_test)
-
-    save_yaml(metrics_test, join(current_iter_folder,'test_metrics.yaml'))    
+    metrics_test = {f"test/{key}": value for key, value in metrics_test.items()}.copy()
+    
+    wandb.log(metrics_test)
+    
+    save_yaml(metrics_test, METRICS_TEST_PATH) 
 
     
     ### Save train metrics ###
     metrics_train = evaluate_metrics(predicted_seg, ground_truth_train, args.nb_class)
-            
-    save_yaml(metrics_train, join(current_iter_folder,'train_metrics.yaml'))
+    metrics_train = {f"train/{key}": value for key, value in metrics_train.items()}.copy()
     
+    wandb.log(metrics_train)
+    
+    save_yaml(metrics_train, METRICS_TRAIN_PATH)
 
+ 
+
+def compile_component_metrics(current_iter_folder, args):
+    
+    current_iter_num = int(current_iter_folder.split("_")[-1])
+    GROUND_TRUTH_TEST_PATH = args.test_segmentation_path
+    ground_truth_test = read_tiff(GROUND_TRUTH_TEST_PATH)
+    
     ### Save test component metrics ###
-    HIGH_PROB_COMPONENTS_PATH = join(current_iter_folder,'all_labels_test_metrics.yaml')
+    COMPONENTS_PRECISION_METRICS_PATH = join(current_iter_folder,'all_labels_test_metrics.yaml')
+    COMPONENTS_STATS_PATH = join(current_iter_folder, "all_labels_stats.parquet")
+    
+    if exists(COMPONENTS_PRECISION_METRICS_PATH) and exists(COMPONENTS_STATS_PATH):
+        return
+    
+    logger.info("============ Compiling Component Metrics ============")
     
     all_labels = read_tiff(join(current_iter_folder, "new_labels", "all_labels_set.tif"))
 
+    ### EVALUATE COMPONENT PRECISION METRICS ###
     all_labels_metrics = evaluate_component_metrics(ground_truth_test, all_labels, args.nb_class)
-
-    save_yaml(all_labels_metrics, HIGH_PROB_COMPONENTS_PATH)
+    
+    all_labels_metrics = {f"all_labels_{key}": value for key, value in all_labels_metrics.items()}.copy()
+    
+    ### EVALUATE COMPONENT STATS: AREA, PERIMETER, ETC ###
+    all_labels_stats = get_components_stats(label(all_labels), all_labels).reset_index()
+    
+    all_labels_stats["iter"] = f"iter_{current_iter_num:03d}"
+    all_labels_stats["iter_num"] = current_iter_num
+    
+    ##### SAVE METRICS ####
+    save_yaml(all_labels_metrics, COMPONENTS_PRECISION_METRICS_PATH)
+    all_labels_stats.to_parquet(COMPONENTS_STATS_PATH)
 
 
 
@@ -730,28 +829,36 @@ def compile_metrics(current_iter_folder, args):
 ### SETUP ###
 #############
 
-ROOT_PATH = dirname(__file__)
-args = load_args(join(ROOT_PATH, "args.yaml"))
-
-version_name = os.path.split(args.data_path)[-1]
-
-logger = create_logger(module_name=__name__, filename=version_name)
-
-logger.info(f"################### {version_name.upper()} ###################")
-
-# create output path
-check_folder(args.data_path)
-
-# Save args state into data_path
-save_yaml(args, join(args.data_path, "args.yaml"))
-
-
-##### LOOP #####
-
-# Set random seed
-fix_random_seeds(args.seed)
 
 if __name__ == "__main__":
+    ROOT_PATH = dirname(__file__)
+    
+    parser = argparse.ArgumentParser(description="Get the arguments file")
+    parser.add_argument('file_path', nargs='?', default='args.yaml', help='Path to the file (default: args.yaml)')
+    args_path = parser.parse_args().file_path
+    
+    args = load_args(args_path)
+    print("Args loaded from",  )
+
+    version_name = os.path.split(args.data_path)[-1]
+
+    logger = create_logger(module_name=__name__, filename=version_name)
+
+    logger.info(f"################### {version_name.upper()} ###################")
+
+    # create output path
+    check_folder(args.data_path)
+
+    # Save args state into data_path
+    save_yaml(args, join(args.data_path, "args.yaml"))
+
+    run = wandb.init(mode="disabled")
+
+    ##### LOOP #####
+
+    # Set random seed
+    fix_random_seeds(args.seed)
+
     
     while True:
 
@@ -770,35 +877,12 @@ if __name__ == "__main__":
         
         # if the iteration 0 applies distance map to ground truth segmentation
         if current_iter == 0:
-            logger.info(f"Generating test distance map")
-
-            TEST_SEGMENTATION_PATH = args.test_segmentation_path
-            TEST_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "test_distance_map.tif")
-            check_folder(dirname(TEST_DISTANCE_MAP_OUTPUT))
-
-            logger.info(f"Generating train distance map")
-            TRAIN_SEGMENTATION_PATH  = args.train_segmentation_path
-            TRAIN_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "train_distance_map.tif")
-            check_folder(dirname(TRAIN_DISTANCE_MAP_OUTPUT))
-
-            # Create processes for test and train distance map generation
-            test_process = Process(target=generate_distance_map, args=(TEST_SEGMENTATION_PATH, TEST_DISTANCE_MAP_OUTPUT, args.sigma))
-            train_process = Process(target=generate_distance_map, args=(TRAIN_SEGMENTATION_PATH, TRAIN_DISTANCE_MAP_OUTPUT, args.sigma))
+            generate_distance_map_for_first_iteration(current_iter_folder, args)
             
-            # Start the processes
-            test_process.start()
-            train_process.start()
-            
-            # Wait for both processes to finish
-            test_process.join()
-            train_process.join()
-
-            logger.info("Both test and train distance maps have been generated in parallel using multiprocessing.")
-
             logger.info("Generating labels view for iter 0")
 
             generate_labels_view(current_iter_folder, args.ortho_image, args.train_segmentation_path)
-            
+    
             logger.info("Done!")
             continue
         
@@ -814,20 +898,24 @@ if __name__ == "__main__":
         evaluate_iteration(current_iter_folder, args)
 
         pred2raster(current_iter_folder, args)
+        
+        compile_metrics(current_iter_folder, args)
 
         generate_labels_for_next_iteration(current_iter_folder, args)
         
-        generate_distance_map_for_next_iteration(current_iter_folder)
+        compile_component_metrics(current_iter_folder, args)
+        
+        generate_distance_map_for_next_iteration(current_iter_folder, args)
 
         #############################################
 
         delete_useless_files(current_iter_folder = current_iter_folder)
         
-        compile_metrics(current_iter_folder, args)
-
         generate_labels_view(current_iter_folder, args.ortho_image, args.train_segmentation_path)
 
         print_sucess("Distance map generated")
  
 
-
+if __name__ != "__main__":
+    from logging import getLogger
+    logger = getLogger("__main__")

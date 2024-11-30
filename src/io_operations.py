@@ -2,7 +2,8 @@ import ast
 import os
 import sys
 from os.path import dirname, join
-from typing import Iterable
+from typing import Iterable, Tuple
+from typing import Iterable, Tuple
 
 import numpy as np
 import pandas as pd
@@ -267,7 +268,8 @@ def array2raster(path_to_save:str, array:np.ndarray, image_metadata:dict, dtype:
         crs = image_metadata['crs'],
         transform = image_metadata['transform'],
         compress="packbits",
-        num_threads='all_cpus'
+        num_threads='all_cpus',
+        BIGTIFF="IF_NEEDED"
     ) as writer:
         
         if BAND_NUM > 1:
@@ -312,7 +314,17 @@ def get_image_shape(tiff_file:str) -> dict:
     
     return (img_metadata["count"], img_metadata["height"], img_metadata["width"])
 
-
+def get_image_pixel_scale(tiff_file:str) -> Tuple[float, float]:
+    """
+    Returns
+    -------
+    Tuple[float, float]
+        Pixel scale in the format (x, y)
+    """
+    with rasterio.open(tiff_file) as src:
+        pixel_scale = src.res
+    
+    return pixel_scale
 
 
 def check_file_extension(file_path:str, extension:str):
