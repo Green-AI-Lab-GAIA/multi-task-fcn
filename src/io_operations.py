@@ -345,8 +345,11 @@ def load_image(file_path:str):
     if file_extension == ".npy":
         return np.load(file_path)
 
-    if file_extension in (".tif", ".tiff", ".TIF", ".TIFF"):
+    elif file_extension in (".tif", ".tiff", ".TIF", ".TIFF"):
         return read_tiff(file_path)
+    
+    else:
+        raise ValueError(f"Invalid file extension {file_extension}. The file extension must be .npy or .tif")
 
 
 def get_npy_shape(npy_path:str):
