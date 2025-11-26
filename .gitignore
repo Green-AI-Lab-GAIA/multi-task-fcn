@@ -18,3 +18,4 @@ debug_folder
 *.ppk
 wandb
 results/
+.venv/
