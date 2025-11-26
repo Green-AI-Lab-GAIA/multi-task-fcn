@@ -89,7 +89,7 @@ def read_yaml(yaml_path:str)->dict:
     for key in yaml_attrdict.keys():
         try:
             yaml_attrdict[key] = ast.literal_eval(yaml_attrdict[key])
-        except:
+        except ast.SyntaxError:
             pass
 
     return yaml_attrdict
