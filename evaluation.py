@@ -119,9 +119,10 @@ def predict_network(ortho_image_shape:Tuple,
                 
         # avoid zero division
         count_image[count_image == 0] = 1
+        mask_div = count_image > 1
         
-        pred_prob = pred_prob/count_image[...,np.newaxis]
-        pred_depth = pred_depth/count_image
+        pred_prob[mask_div] = pred_prob[mask_div]/count_image[mask_div][:,None]
+        pred_depth[mask_div] = pred_depth[mask_div]/count_image[mask_div]
         
         del count_image
         return pred_prob, np.argmax(pred_prob,axis=-1).astype("uint8"), pred_depth
