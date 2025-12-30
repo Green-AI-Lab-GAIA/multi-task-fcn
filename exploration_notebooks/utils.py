@@ -4,12 +4,53 @@ import pandas as pd
 from millify import millify
 from matplotlib.ticker import FuncFormatter
 import matplotlib.pyplot as plt
+import cv2
 
-from typing import Union
+from typing import Union, Optional
 
 import numpy as np
 
 ROOT_PATH = dirname(dirname(__file__))
+
+
+def fast_imshow(image: np.ndarray, ax: Optional[plt.Axes] = None, scale: float = 1/16, **kwargs):
+    """
+    Mostra uma imagem rapidamente fazendo resize dela.
+    
+    Parameters
+    ----------
+    image : np.ndarray
+        Imagem a ser mostrada
+    ax : plt.Axes, optional
+        Eixo onde plotar. Se None, cria uma nova figura.
+    scale : float
+        Fator de escala para resize (default 1/16)
+    **kwargs : dict
+        Argumentos adicionais passados para ax.imshow (ex: cmap, vmin, vmax)
+    
+    Returns
+    -------
+    plt.Axes
+        O eixo onde a imagem foi plotada
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 10))
+    
+    # Handle boolean images (OpenCV doesn't support bool)
+    if image.dtype == bool:
+        image = image.astype(np.uint8) * 255
+    
+    # Resize if image is large enough
+    h, w = image.shape[:2]
+    new_h, new_w = int(h * scale), int(w * scale)
+    
+    if new_h > 0 and new_w > 0:
+        # Use INTER_NEAREST to preserve categorical values/masks
+        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    
+    ax.imshow(image, **kwargs)
+    return ax
+
 
 
 def get_version_num(version_path:str)->float:
