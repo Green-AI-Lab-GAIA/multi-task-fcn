@@ -42,6 +42,112 @@ logger = getLogger("__main__")
 
 
 # =============================================================================
+# AREA CALCULATION UTILITIES
+# =============================================================================
+
+def get_area_in_square_meters(gdf: gpd.GeoDataFrame) -> pd.Series:
+    """
+    Calculate area in square meters for all geometries in a GeoDataFrame.
+    
+    This function is CRS-agnostic: it automatically handles both projected
+    (metric) and geographic (lat/lon) coordinate systems by reprojecting
+    to an appropriate UTM zone when necessary.
+    
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame with polygon geometries
+    
+    Returns
+    -------
+    pd.Series
+        Series with area values in square meters (m²)
+    
+    Notes
+    -----
+    - For projected CRS with metric units (e.g., UTM): uses geometry.area directly
+    - For geographic CRS (e.g., WGS84 EPSG:4326): reprojects to UTM based on centroid
+    - For CRS without units info: assumes metric and uses geometry.area
+    """
+    if gdf.empty:
+        return pd.Series([], dtype=float)
+    
+    # If no CRS is set, assume the coordinates are already in a metric system
+    if gdf.crs is None:
+        logger.warning("GeoDataFrame has no CRS set. Assuming metric coordinates.")
+        return gdf.geometry.area
+    
+    # Check if the CRS is projected (usually metric) or geographic (degrees)
+    if gdf.crs.is_projected:
+        # Check if the units are meters
+        axis_info = gdf.crs.axis_info
+        if axis_info and len(axis_info) > 0:
+            unit_name = axis_info[0].unit_name.lower() if axis_info[0].unit_name else ""
+            if "metre" in unit_name or "meter" in unit_name:
+                # Already in meters, use directly
+                return gdf.geometry.area
+            elif "foot" in unit_name or "feet" in unit_name:
+                # Convert from square feet to square meters (1 ft² = 0.092903 m²)
+                return gdf.geometry.area * 0.092903
+        # If we can't determine units, assume meters for projected CRS
+        return gdf.geometry.area
+    
+    # Geographic CRS (lat/lon) - need to reproject to UTM
+    # Calculate the centroid of all geometries to determine the UTM zone
+    total_bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
+    center_lon = (total_bounds[0] + total_bounds[2]) / 2
+    center_lat = (total_bounds[1] + total_bounds[3]) / 2
+    
+    # Determine UTM zone from longitude
+    utm_zone = int((center_lon + 180) / 6) + 1
+    
+    # Determine hemisphere (north or south)
+    if center_lat >= 0:
+        utm_crs = f"EPSG:326{utm_zone:02d}"  # Northern hemisphere
+    else:
+        utm_crs = f"EPSG:327{utm_zone:02d}"  # Southern hemisphere
+    
+    logger.debug(f"Reprojecting from {gdf.crs} to {utm_crs} for area calculation")
+    
+    # Reproject to UTM and calculate area
+    gdf_utm = gdf.to_crs(utm_crs)
+    return gdf_utm.geometry.area
+
+
+def is_crs_metric(crs) -> bool:
+    """
+    Check if a CRS uses metric units (meters).
+    
+    Parameters
+    ----------
+    crs : pyproj.CRS or similar
+        Coordinate Reference System object
+    
+    Returns
+    -------
+    bool
+        True if the CRS uses metric units, False otherwise
+    """
+    if crs is None:
+        return True  # Assume metric if no CRS
+    
+    if not crs.is_projected:
+        return False  # Geographic CRS uses degrees
+    
+    # Check axis units
+    axis_info = crs.axis_info
+    if axis_info and len(axis_info) > 0:
+        unit_name = axis_info[0].unit_name.lower() if axis_info[0].unit_name else ""
+        if "metre" in unit_name or "meter" in unit_name:
+            return True
+        elif "foot" in unit_name or "feet" in unit_name:
+            return False
+    
+    # Default to True for projected CRS without clear unit info
+    return True
+
+
+# =============================================================================
 # RASTER TO VECTOR CONVERSION
 # =============================================================================
 
@@ -501,6 +607,7 @@ def filter_by_geometric_properties_vector(
     max_area: float = None,
     min_solidity: float = None,
     max_eccentricity: float = None,
+    area_in_meters: bool = True,
 ) -> gpd.GeoDataFrame:
     """
     Filter GeoDataFrame by geometric properties (vector-based).
@@ -510,11 +617,16 @@ def filter_by_geometric_properties_vector(
     gdf : gpd.GeoDataFrame
         Input GeoDataFrame with geometry column
     min_area, max_area : float, optional
-        Area bounds
+        Area bounds in square meters (m²) if area_in_meters=True,
+        otherwise in the CRS native units
     min_solidity : float, optional
         Minimum solidity threshold
     max_eccentricity : float, optional
         Maximum eccentricity threshold
+    area_in_meters : bool, default True
+        If True, area thresholds are interpreted as square meters (m²)
+        and the function will automatically convert from the CRS units.
+        If False, uses the native CRS units (may be degrees² for geographic CRS).
     
     Returns
     -------
@@ -526,21 +638,31 @@ def filter_by_geometric_properties_vector(
     
     mask = pd.Series([True] * len(gdf), index=gdf.index)
     
-    if 'area' not in gdf.columns:
+    # Calculate area for filtering
+    if area_in_meters and (min_area is not None or max_area is not None):
+        # Use area in square meters (CRS-agnostic)
+        area_m2 = get_area_in_square_meters(gdf)
         gdf = gdf.copy()
-        gdf['area'] = gdf.geometry.area
+        gdf['area_m2'] = area_m2
+        area_column = 'area_m2'
+    else:
+        # Use native CRS units
+        if 'area' not in gdf.columns:
+            gdf = gdf.copy()
+            gdf['area'] = gdf.geometry.area
+        area_column = 'area'
     
     if min_area is not None:
-        mask &= gdf['area'] >= min_area
+        mask &= gdf[area_column] >= min_area
     
     if max_area is not None:
-        mask &= gdf['area'] <= max_area
+        mask &= gdf[area_column] <= max_area
     
     if min_solidity is not None:
         if 'solidity' not in gdf.columns:
             gdf = gdf.copy()
             gdf['convex_area'] = gdf.geometry.convex_hull.area
-            gdf['solidity'] = gdf['area'] / gdf['convex_area'].replace(0, np.nan)
+            gdf['solidity'] = gdf.geometry.area / gdf['convex_area'].replace(0, np.nan)
             gdf['solidity'] = gdf['solidity'].fillna(1.0)
         mask &= gdf['solidity'] >= min_solidity
     
@@ -757,12 +879,15 @@ def get_new_segmentation_sample_vector(
     """
     logger.info("Vector-based sample selection starting...")
     
-    # Filter by geometric properties
-    logger.info("Filtering components by geometric properties")
+    # Filter by geometric properties (area in square meters, CRS-agnostic)
+    lower_limit = args.get('lower_limit_area')
+    upper_limit = args.get('upper_limit_area')
+    logger.info(f"Filtering components by geometric properties: area {lower_limit} m² - {upper_limit} m²")
     new_pred_gdf = filter_by_geometric_properties_vector(
         new_pred_gdf,
-        min_area=args.get('lower_limit_area'),
-        max_area=args.get('upper_limit_area'),
+        min_area=lower_limit,
+        max_area=upper_limit,
+        area_in_meters=True,  # Use square meters (m²), CRS-agnostic
     )
     
     # Filter by mask if provided
