@@ -286,7 +286,7 @@ def get_new_segmentation_sample_vector(
     new_pred_map = new_pred_map.copy()
     new_pred_map += 1
     
-    logger.info(f"Filtering components with depth >= {depth_thr} and prob >= {prob_thr}")
+    logger.info(f"Filtering components with depth+prob >= {depth_thr+prob_thr}")
     
     # Filter and convert to GeoDataFrame
     new_pred_gdf = filter_map_by_depth_prob_to_gdf(
