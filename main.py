@@ -20,9 +20,16 @@ from tqdm import tqdm
 import wandb
 from evaluation import evaluate_iteration
 from generate_distance_map import generate_distance_map
+from generate_distance_map_vector import generate_distance_map_fast
 from pred2raster import pred2raster
 from sample_selection import get_components_stats, get_new_segmentation_sample
-from src.dataset import DatasetFromCoord
+from sample_selection_vector import (
+    get_new_segmentation_sample_vector,
+    save_labels_vector,
+    load_or_convert_labels,
+    get_components_stats_vector,
+)
+from src.dataset import DatasetFromCoord, MultiRegionDatasetFromCoord
 from src.deepvlab3 import DeepLabv3
 from src.io_operations import (ParquetUpdater, array2raster,
                                get_image_metadata,
@@ -34,7 +41,16 @@ from src.model import eval, load_weights, save_checkpoint, train, build_model
 from src.utils import (check_folder, fix_random_seeds, from_255_to_1,
                        get_device, print_sucess,
                        restart_from_checkpoint, restore_checkpoint_variables)
+from src.vector_operations import (
+    geodataframe_to_raster,
+    labels_to_geodataframe_with_stats,
+    load_labels_from_geopackage,
+    save_labels_as_geopackage,
+)
 from visualization import generate_labels_view
+
+# Flag to use vector operations (set to True for faster processing)
+USE_VECTOR_OPERATIONS = True
 
 gc.set_threshold(0)
 
@@ -55,32 +71,40 @@ def delete_useless_files(current_iter_folder:str):
 
 
 
-def is_iter_0_done(data_path:str):
-    """Verify if the distance map from the ground truth segmentation is done
+def is_iter_0_done(data_path: str, num_regions: int = 1) -> bool:
+    """Verify if the distance map from the ground truth segmentation is done for all regions.
 
     Parameters
     ----------
     data_path : str
         Root data path
+    num_regions : int
+        Number of regions to check
 
     Returns
     -------
     bool
     """
-    path_distance_map = join(data_path, "iter_000", "distance_map")
-    is_test_map_done = exists(join(path_distance_map, "test_distance_map.tif"))
-    is_train_map_done = exists(join(path_distance_map, "train_distance_map.tif"))
+    for region_idx in range(num_regions):
+        if num_regions > 1:
+            path_distance_map = join(data_path, "iter_000", f"region_{region_idx}", "distance_map")
+        else:
+            path_distance_map = join(data_path, "iter_000", "distance_map")
+        
+        is_test_map_done = exists(join(path_distance_map, "test_distance_map.tif"))
+        is_train_map_done = exists(join(path_distance_map, "train_distance_map.tif"))
+        
+        if not (is_test_map_done and is_train_map_done):
+            return False
     
-    if is_test_map_done and is_train_map_done:
-        return True
-    
-    else:
-        return False
+    return True
 
 
-def get_current_iter_folder(data_path, overlap):
+def get_current_iter_folder(data_path, overlap, num_regions: int = 1):
     """Get the current iteration folder
     This function verify which iteration folder isn't finished yet and return the path to it.
+    
+    For multi-region: checks that ALL regions have completed predictions and distance maps.
 
     Parameters
     ----------
@@ -88,6 +112,8 @@ def get_current_iter_folder(data_path, overlap):
         Path to the data folder 
     overlap : float
         Parameter used for create the output file name
+    num_regions : int
+        Number of regions (default 1 for backwards compatibility)
 
     Returns
     -------
@@ -109,19 +135,29 @@ def get_current_iter_folder(data_path, overlap):
     for idx, iter_folder_name in enumerate(iter_folders):
         
         iter_path = join(data_path, iter_folder_name)
-
-        prediction_path = join(iter_path, "raster_prediction")
         
-        is_folder_generated = exists(prediction_path)
-        is_depth_done = isfile(join(prediction_path, f"depth_{np.sum(overlap)}.TIF"))
-        is_pred_done = isfile(join(prediction_path, f"join_class_{np.sum(overlap)}.TIF"))
-        is_prob_done = isfile(join(prediction_path, f"join_prob_{np.sum(overlap)}.TIF"))
-        
-        distance_map_path = join(iter_path, "distance_map")
-        is_distance_map_done = isfile(join(distance_map_path, "selected_distance_map.tif"))
-
-        if is_folder_generated and is_depth_done and is_pred_done and is_prob_done and is_distance_map_done:
+        # Check if all regions are done
+        all_regions_done = True
+        for region_idx in range(num_regions):
+            if num_regions > 1:
+                region_folder = join(iter_path, f"region_{region_idx}")
+                prediction_path = join(region_folder, "raster_prediction")
+                distance_map_path = join(region_folder, "distance_map")
+            else:
+                prediction_path = join(iter_path, "raster_prediction")
+                distance_map_path = join(iter_path, "distance_map")
             
+            is_folder_generated = exists(prediction_path)
+            is_depth_done = isfile(join(prediction_path, f"depth_{np.sum(overlap)}.TIF"))
+            is_pred_done = isfile(join(prediction_path, f"join_class_{np.sum(overlap)}.TIF"))
+            is_prob_done = isfile(join(prediction_path, f"join_prob_{np.sum(overlap)}.TIF"))
+            is_distance_map_done = isfile(join(distance_map_path, "selected_distance_map.tif"))
+            
+            if not (is_folder_generated and is_depth_done and is_pred_done and is_prob_done and is_distance_map_done):
+                all_regions_done = False
+                break
+
+        if all_regions_done:
             next_iter = int(iter_folder_name.split("_")[-1]) + 1
             next_iter_path = join(data_path, f"iter_{next_iter:03d}")
             
@@ -129,7 +165,7 @@ def get_current_iter_folder(data_path, overlap):
 
             return next_iter_path
     
-    if is_iter_0_done(data_path):
+    if is_iter_0_done(data_path, num_regions):
         return join(data_path, f"iter_{1:03d}")
 
 
@@ -139,19 +175,106 @@ def get_current_iter_folder(data_path, overlap):
     return iter_0_path
     
 
-def get_last_segmentation_path(train_segmentation_path, current_iter_folder):
+def get_last_segmentation_path(train_segmentation_path, current_iter_folder, region_idx: int = None, num_regions: int = 1):
+    """Get the path to the last segmentation file.
+    
+    Now supports both TIFF and GeoPackage formats and multiple regions.
+    Prioritizes GeoPackage if available.
+    
+    Parameters
+    ----------
+    train_segmentation_path : str
+        Path to the initial train segmentation
+    current_iter_folder : str
+        Current iteration folder path
+    region_idx : int, optional
+        Region index for multi-region support
+    num_regions : int
+        Total number of regions
+    
+    Returns
+    -------
+    str
+        Path to the segmentation file
+    """
     current_iter = int(current_iter_folder.split("_")[-1])
-
     data_path = dirname(current_iter_folder)
 
     if current_iter == 1:
         image_path = train_segmentation_path
-        
 
     else:
-        image_path = join(data_path, f"iter_{current_iter-1:03d}", "new_labels", "selected_labels_set.tif")
+        # Build path based on region
+        # For training dataset, we need TIFF format (raster) since load_image only supports .tif/.npy
+        # GeoPackage is used for vector operations but TIFF is always saved alongside
+        if num_regions > 1 and region_idx is not None:
+            region_folder = f"region_{region_idx}"
+            tiff_path = join(data_path, f"iter_{current_iter-1:03d}", region_folder, "new_labels", "selected_labels_set.tif")
+        else:
+            tiff_path = join(data_path, f"iter_{current_iter-1:03d}", "new_labels", "selected_labels_set.tif")
+        
+        image_path = tiff_path
 
     return image_path
+
+
+def get_last_segmentation_paths_all_regions(args: dict, current_iter_folder: str) -> list:
+    """Get segmentation paths for all regions.
+    
+    Parameters
+    ----------
+    args : dict
+        Arguments dictionary with train_segmentation_paths
+    current_iter_folder : str
+        Current iteration folder
+    
+    Returns
+    -------
+    list
+        List of paths for all regions
+    """
+    num_regions = getattr(args, 'num_regions', 1)
+    paths = []
+    for region_idx in range(num_regions):
+        path = get_last_segmentation_path(
+            args.train_segmentation_paths[region_idx],
+            current_iter_folder,
+            region_idx=region_idx,
+            num_regions=num_regions
+        )
+        paths.append(path)
+    return paths
+
+
+def load_segmentation_from_path(image_path: str, reference_tiff: str = None) -> np.ndarray:
+    """Load segmentation from either TIFF or GeoPackage format.
+    
+    Parameters
+    ----------
+    image_path : str
+        Path to the segmentation file (.tif or .gpkg)
+    reference_tiff : str, optional
+        Reference TIFF for shape when loading GeoPackage
+    
+    Returns
+    -------
+    np.ndarray
+        Segmentation array
+    """
+    if image_path.endswith('.gpkg'):
+        import geopandas as gpd
+        gdf = gpd.read_file(image_path)
+        
+        if reference_tiff is None:
+            raise ValueError("reference_tiff required when loading from GeoPackage")
+        
+        meta = get_image_metadata(reference_tiff)
+        shape = (meta['height'], meta['width'])
+        transform = meta.get('transform')
+        
+        return geodataframe_to_raster(gdf, shape, transform)
+    else:
+        return read_tiff(image_path)
 
 
 def read_last_segmentation(current_iter_folder:str, train_segmentation_path:str)-> np.ndarray:
@@ -182,7 +305,23 @@ def read_last_segmentation(current_iter_folder:str, train_segmentation_path:str)
 def read_val_segmentation():
     return read_tiff(args.train_segmentation_path)
 
-def get_last_distance_map_path(current_iter_folder:str):
+def get_last_distance_map_path(current_iter_folder: str, region_idx: int = None, num_regions: int = 1):
+    """Get the path to the last distance map file.
+    
+    Parameters
+    ----------
+    current_iter_folder : str
+        Current iteration folder path
+    region_idx : int, optional
+        Region index for multi-region support
+    num_regions : int
+        Total number of regions
+    
+    Returns
+    -------
+    str
+        Path to the distance map file
+    """
     current_iter = int(current_iter_folder.split("_")[-1])
     data_path = dirname(current_iter_folder)
 
@@ -191,9 +330,41 @@ def get_last_distance_map_path(current_iter_folder:str):
     else:
         distance_map_filename = "selected_distance_map.tif"
 
-    image_path = join(data_path, f"iter_{current_iter-1:03d}", "distance_map", distance_map_filename)
+    # Build path based on region
+    if num_regions > 1 and region_idx is not None:
+        region_folder = f"region_{region_idx}"
+        image_path = join(data_path, f"iter_{current_iter-1:03d}", region_folder, "distance_map", distance_map_filename)
+    else:
+        image_path = join(data_path, f"iter_{current_iter-1:03d}", "distance_map", distance_map_filename)
     
     return image_path
+
+
+def get_last_distance_map_paths_all_regions(args: dict, current_iter_folder: str) -> list:
+    """Get distance map paths for all regions.
+    
+    Parameters
+    ----------
+    args : dict
+        Arguments dictionary
+    current_iter_folder : str
+        Current iteration folder
+    
+    Returns
+    -------
+    list
+        List of paths for all regions
+    """
+    num_regions = getattr(args, 'num_regions', 1)
+    paths = []
+    for region_idx in range(num_regions):
+        path = get_last_distance_map_path(
+            current_iter_folder,
+            region_idx=region_idx,
+            num_regions=num_regions
+        )
+        paths.append(path)
+    return paths
 
 
 def read_last_distance_map(current_iter_folder:str)->np.ndarray:
@@ -389,9 +560,11 @@ def train_epochs(last_checkpoint:str,
 
 
 
-def train_iteration(current_iter_folder:str, args:dict):
+def train_iteration(current_iter_folder: str, args: dict):
     """Train the model in the current iteration.
-    Load the output and the model trained from the last iteration, and train the model again
+    Load the output and the model trained from the last iteration, and train the model again.
+    
+    Supports multiple regions: combines data from all regions into a single dataset.
 
     Parameters
     ----------
@@ -402,11 +575,10 @@ def train_iteration(current_iter_folder:str, args:dict):
         The parameters are defined in the args.yaml file
     """
     DEVICE = get_device()
+    num_regions = getattr(args, 'num_regions', 1)
 
     current_model_folder = join(current_iter_folder, args.model_dir)
-
     current_iter = int(current_iter_folder.split("_")[-1])
-
 
     current_iter_checkpoint = join(current_model_folder, args.checkpoint_file)
     
@@ -414,60 +586,113 @@ def train_iteration(current_iter_folder:str, args:dict):
         last_checkpoint = current_iter_checkpoint
         loaded_from_last_iteration = False
     
-    # If the weights from the current iteration, doenst exist.
     elif not isfile(current_iter_checkpoint):
         if current_iter > 1:
             last_checkpoint = join(args.data_path, f"iter_{current_iter-1:03d}", args.model_dir, args.checkpoint_file)
             loaded_from_last_iteration = True
             print_sucess("Loaded_from_last_checkpoint")
-
         elif current_iter == 1:
             last_checkpoint = None
             loaded_from_last_iteration = False    
-    
 
     if last_checkpoint is None:
         pass
-    
     else:
         to_restore = restore_checkpoint_variables(checkpoint_path=last_checkpoint)
-
         if to_restore["is_iter_finished"] and not loaded_from_last_iteration:
             return
-    
 
-    logger.info("============ Initialized Training ============")
+    logger.info(f"============ Initialized Training with {num_regions} region(s) ============")
     
+    # Get input_dimension from args, default to size_crops if not specified
+    input_dimension = getattr(args, 'input_dimension', args.size_crops)
+    logger.info(f"Crop size: {args.size_crops}, Input dimension to model: {input_dimension}")
 
-    segmentation_path = get_last_segmentation_path(args.train_segmentation_path, current_iter_folder)
-    distance_map_path = get_last_distance_map_path(current_iter_folder)
+    # Get paths for all regions
+    segmentation_paths = get_last_segmentation_paths_all_regions(args, current_iter_folder)
+    distance_map_paths = get_last_distance_map_paths_all_regions(args, current_iter_folder)
     
+    # Build validation paths
     if args.validation_set == "train":
-        val_segmentation_path = segmentation_path
-        val_distance_map_path = distance_map_path
-    
+        val_segmentation_paths = segmentation_paths
+        val_distance_map_paths = distance_map_paths
     elif args.validation_set == "test":
-        val_segmentation_path = args.test_segmentation_path
-        val_distance_map_path = join(args.data_path, f"iter_000", "distance_map", "test_distance_map.tif")
-    
+        val_segmentation_paths = args.test_segmentation_paths
+        val_distance_map_paths = []
+        for region_idx in range(num_regions):
+            if num_regions > 1:
+                path = join(args.data_path, "iter_000", f"region_{region_idx}", "distance_map", "test_distance_map.tif")
+            else:
+                path = join(args.data_path, "iter_000", "distance_map", "test_distance_map.tif")
+            val_distance_map_paths.append(path)
     elif args.validation_set == "full":
-        val_segmentation_path = args.full_segmentation_path
-        val_distance_map_path = join(args.data_path, f"iter_000", "distance_map", "full_distance_map.tif")
-        
+        val_segmentation_paths = args.full_segmentation_paths
+        val_distance_map_paths = []
+        for region_idx in range(num_regions):
+            if num_regions > 1:
+                path = join(args.data_path, "iter_000", f"region_{region_idx}", "distance_map", "full_distance_map.tif")
+            else:
+                path = join(args.data_path, "iter_000", "distance_map", "full_distance_map.tif")
+            val_distance_map_paths.append(path)
     else:
         raise ValueError("validation_set must be 'train', 'test' or 'full'")
 
-    train_dataset = DatasetFromCoord(
-        image_path=args.ortho_image,
-        segmentation_path=segmentation_path,
-        distance_map_path=distance_map_path,
-        samples=args.samples,
-        augment=args.augment,
-        crop_size=args.size_crops,
-        copy_paste_augmentation=args.copy_and_paste_augmentation
-    )
+    # Use MultiRegionDatasetFromCoord for multiple regions, or single region dataset
+    if num_regions > 1:
+        logger.info(f"Creating multi-region dataset with {num_regions} regions")
+        train_dataset = MultiRegionDatasetFromCoord(
+            image_paths=args.ortho_images,
+            segmentation_paths=segmentation_paths,
+            distance_map_paths=distance_map_paths,
+            samples=args.samples,
+            augment=args.augment,
+            crop_size=args.size_crops,
+            input_dimension=input_dimension,
+            copy_paste_augmentation=args.copy_and_paste_augmentation,
+            balance_regions=True
+        )
+        
+        val_dataset = MultiRegionDatasetFromCoord(
+            image_paths=args.ortho_images,
+            segmentation_paths=val_segmentation_paths,
+            distance_map_paths=val_distance_map_paths,
+            samples=args.samples // 3,
+            augment=False,
+            crop_size=args.size_crops,
+            input_dimension=input_dimension,
+            copy_paste_augmentation=False,
+            balance_regions=True
+        )
+        
+        # Log sample distribution
+        train_counts = train_dataset.get_region_sample_counts()
+        logger.info(f"Training samples per region: {train_counts}")
+    else:
+        # Single region - use original dataset
+        train_dataset = DatasetFromCoord(
+            image_path=args.ortho_images[0],
+            segmentation_path=segmentation_paths[0],
+            distance_map_path=distance_map_paths[0],
+            samples=args.samples,
+            augment=args.augment,
+            crop_size=args.size_crops,
+            input_dimension=input_dimension,
+            copy_paste_augmentation=args.copy_and_paste_augmentation
+        )
+        
+        val_dataset = DatasetFromCoord(
+            image_path=args.ortho_images[0],
+            segmentation_path=val_segmentation_paths[0],
+            distance_map_path=val_distance_map_paths[0],
+            samples=args.samples // 3,
+            augment=False,
+            crop_size=args.size_crops,
+            input_dimension=input_dimension,
+            copy_paste_augmentation=False
+        )
     
     train_dataset.standardize_image_channels()
+    val_dataset.standardize_image_channels()
     
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -478,31 +703,20 @@ def train_iteration(current_iter_folder:str, args:dict):
         shuffle=True,
     )
 
-
-    # LOAD VALIDATION SET
-    val_dataset = DatasetFromCoord(
-        image_path=args.ortho_image,
-        segmentation_path=val_segmentation_path,
-        distance_map_path=val_distance_map_path,
-        samples=args.samples//3,
-        augment=args.augment,
-        crop_size=args.size_crops,
-        copy_paste_augmentation=False
-    )
-    val_dataset.standardize_image_channels()
-
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size = args.batch_size,
-        num_workers = args.workers,
-        pin_memory = True,
-        drop_last = True,
-        shuffle = True,
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        pin_memory=True,
+        drop_last=True,
+        shuffle=True,
     )
 
-    logger.info("Building data done with {} images loaded.".format(len(train_loader)))
+    logger.info("Building data done with {} batches loaded.".format(len(train_loader)))
 
-    orthoimage_meta = get_image_metadata(args.ortho_image)
+    # Get image metadata from first region (all should have same number of channels)
+    orthoimage_meta = get_image_metadata(args.ortho_images[0])
+    
     model = build_model(
         in_channels=orthoimage_meta["count"],
         num_classes=args.nb_class,
@@ -510,12 +724,11 @@ def train_iteration(current_iter_folder:str, args:dict):
         dropout_rate=args.dropout_rate,
         batch_norm=args.batch_norm,
         pretrained=args.is_pretrained,
-        psize=args.size_crops,
+        psize=input_dimension,
     )
 
     logger.info("Building model done.")
 
-    ###### BULD OPTMIZER #######
     optimizer = torch.optim.SGD(
         model.parameters(),
         lr=args.base_lr,
@@ -523,7 +736,6 @@ def train_iteration(current_iter_folder:str, args:dict):
         weight_decay=args.weight_decay
     )
 
-    # define how the learning rate will be changed in the training process.
     lr_schedule = get_learning_rate_schedule(
         train_loader, 
         args.base_lr, 
@@ -533,48 +745,33 @@ def train_iteration(current_iter_folder:str, args:dict):
         args.start_warmup
     )
     logger.info("Building optimizer done.")
-
-
     
-    ########## LOAD MODEL WEIGHTS FROM THE LAST CHECKPOINT ##########
     if last_checkpoint is None:
-        # create empty checkpoint
         save_checkpoint(current_iter_checkpoint, model, optimizer, 0, 0.0, 0, is_iter_finished=False)
-        
         last_checkpoint = current_iter_checkpoint
-    
 
     model = load_weights(model, last_checkpoint)
-    # Load model to GPU
     model = model.to(DEVICE)
     
-    # restore variables
-    to_restore = {"epoch": 0, "best_val":(0.), "count_early": 0, "is_iter_finished":False}
+    to_restore = {"epoch": 0, "best_val": 0., "count_early": 0, "is_iter_finished": False}
     restart_from_checkpoint(
         last_checkpoint,
-        run_variables = to_restore,
-        state_dict = model,
-        optimizer = optimizer,
+        run_variables=to_restore,
+        state_dict=model,
+        optimizer=optimizer,
     )
 
-
-    # If the metrics are from the model from the last iteration, 
-    # the model reset the metrics
     if loaded_from_last_iteration:
         to_restore["epoch"] = 0
         to_restore["best_val"] = 0.0
         to_restore["count_early"] = 0
         to_restore["is_iter_finished"] = False
-    
 
-    ######## TRAIN MODEL #########
     current_checkpoint = join(current_model_folder, args.checkpoint_file)
     
     cudnn.benchmark = True
-    
     gc.collect()
 
-    # If the model isnt finished yet, train!
     if not to_restore["is_iter_finished"]:
         train_epochs(current_checkpoint, 
                      to_restore["epoch"], 
@@ -585,24 +782,20 @@ def train_iteration(current_iter_folder:str, args:dict):
                      optimizer, 
                      lr_schedule, 
                      to_restore["count_early"],
-                     val_loader = val_loader,
-                     current_iter_folder = current_iter_folder,
+                     val_loader=val_loader,
+                     current_iter_folder=current_iter_folder,
                      lambda_weight=args.lambda_weight)
     gc.collect()
 
-
-    #### CHANGE MODEL STATUS TO FINISHED ####
-    # load models weights again to change status to is_iter_finished=True
     model = load_weights(model, current_checkpoint)
 
-    to_restore = {"epoch": 0, "count_early": 0, "is_iter_finished":False, "best_val":(0.)}
+    to_restore = {"epoch": 0, "count_early": 0, "is_iter_finished": False, "best_val": 0.}
     restart_from_checkpoint(
         current_checkpoint,
         run_variables=to_restore,
         state_dict=model,
         optimizer=optimizer,
     )
-    
     
     save_checkpoint(current_checkpoint, 
                     model, 
@@ -611,217 +804,580 @@ def train_iteration(current_iter_folder:str, args:dict):
                     to_restore["best_val"], 
                     to_restore["count_early"], 
                     is_iter_finished=True)
-    
 
-    # FREE UP MEMORY
     with torch.no_grad():
         torch.cuda.empty_cache()
     
     gc.collect()
 
 
-def generate_labels_for_next_iteration(current_iter_folder:str, args:dict):
+def generate_labels_for_next_iteration(current_iter_folder: str, args: dict):
     """
-    Generate labels and distance map for the next iteration
-    """
+    Generate labels and distance map for the next iteration for all regions.
     
-    ALL_LABELS_OUPUT_PATH = join(current_iter_folder, "new_labels", f'all_labels_set.tif')
-    SELECTED_LABELS_OUTPUT_PATH = join(current_iter_folder, "new_labels", f'selected_labels_set.tif')
+    Now uses vector operations for faster processing and saves as GeoPackage.
+    Also saves TIFF for backwards compatibility with training dataset.
+    Supports multiple regions.
+    """
+    num_regions = getattr(args, 'num_regions', 1)
+    current_iter = int(current_iter_folder.split("iter_")[-1])
+    
+    logger.info(f"============ Generating New Samples for {num_regions} region(s) ============")
+    
+    for region_idx in range(num_regions):
+        generate_labels_for_region(current_iter_folder, args, region_idx)
 
-    if exists(ALL_LABELS_OUPUT_PATH) and exists(SELECTED_LABELS_OUTPUT_PATH):
+
+def generate_labels_for_region(current_iter_folder: str, args: dict, region_idx: int):
+    """
+    Generate labels for a single region.
+    
+    Parameters
+    ----------
+    current_iter_folder : str
+        Current iteration folder
+    args : dict
+        Arguments dictionary
+    region_idx : int
+        Index of the region to process
+    """
+    num_regions = getattr(args, 'num_regions', 1)
+    current_iter = int(current_iter_folder.split("iter_")[-1])
+    
+    # Determine region folder
+    if num_regions > 1:
+        region_folder = join(current_iter_folder, f"region_{region_idx}")
+        logger.info(f"=== Generating labels for Region {region_idx} ===")
+    else:
+        region_folder = current_iter_folder
+    
+    # Output paths
+    output_folder = join(region_folder, "new_labels")
+    ALL_LABELS_GPKG_PATH = join(output_folder, 'all_labels_set.gpkg')
+    SELECTED_LABELS_GPKG_PATH = join(output_folder, 'selected_labels_set.gpkg')
+    ALL_LABELS_TIFF_PATH = join(output_folder, 'all_labels_set.tif')
+    SELECTED_LABELS_TIFF_PATH = join(output_folder, 'selected_labels_set.tif')
+
+    # Check if already done
+    gpkg_done = exists(ALL_LABELS_GPKG_PATH) and exists(SELECTED_LABELS_GPKG_PATH)
+    tiff_done = exists(ALL_LABELS_TIFF_PATH) and exists(SELECTED_LABELS_TIFF_PATH)
+    
+    if gpkg_done or tiff_done:
+        logger.info(f"Region {region_idx} labels already exist. Skipping...")
         return
     
-    logger.info("============ Generating New Samples ============")
+    # Get paths for this region
+    train_seg_path = args.train_segmentation_paths[region_idx]
+    raster_pred_folder = join(region_folder, "raster_prediction")
 
-    current_iter = int(current_iter_folder.split("iter_")[-1])
-
-    NEW_PRED_FILE = join(current_iter_folder, "raster_prediction", f'join_class_{np.sum(args.overlap)}.TIF')
+    # Load model predictions for this region
+    NEW_PRED_FILE = join(raster_pred_folder, f'join_class_{np.sum(args.overlap)}.TIF')
     new_pred_map = read_tiff(NEW_PRED_FILE)
 
-    NEW_PROB_FILE = join(current_iter_folder, "raster_prediction", f'join_prob_{np.sum(args.overlap)}.TIF')
+    NEW_PROB_FILE = join(raster_pred_folder, f'join_prob_{np.sum(args.overlap)}.TIF')
     new_prob_map = read_tiff(NEW_PROB_FILE)
     new_prob_map = from_255_to_1(new_prob_map)
 
-    NEW_DEPTH_FILE = join(current_iter_folder, "raster_prediction", f'depth_{np.sum(args.overlap)}.TIF')
+    NEW_DEPTH_FILE = join(raster_pred_folder, f'depth_{np.sum(args.overlap)}.TIF')
     new_depth_map = read_tiff(NEW_DEPTH_FILE)
     new_depth_map = from_255_to_1(new_depth_map)
-    
 
-
+    # Determine old labels paths
     if current_iter == 1:
-        OLD_SELECTED_LABELS_FILE = args.train_segmentation_path
-        OLD_ALL_LABELS_FILE = args.train_segmentation_path
-
+        OLD_SELECTED_LABELS_FILE = train_seg_path
+        OLD_ALL_LABELS_FILE = train_seg_path
     else:
-        OLD_SELECTED_LABELS_FILE = join(args.data_path, f"iter_{current_iter-1:03d}", "new_labels", f'selected_labels_set.tif')
-        OLD_ALL_LABELS_FILE = join(args.data_path, f"iter_{current_iter-1:03d}", "new_labels", f'all_labels_set.tif')
+        # Build paths for previous iteration
+        if num_regions > 1:
+            prev_region_folder = join(args.data_path, f"iter_{current_iter-1:03d}", f"region_{region_idx}")
+        else:
+            prev_region_folder = join(args.data_path, f"iter_{current_iter-1:03d}")
+        
+        old_gpkg_selected = join(prev_region_folder, "new_labels", 'selected_labels_set.gpkg')
+        old_gpkg_all = join(prev_region_folder, "new_labels", 'all_labels_set.gpkg')
+        old_tiff_selected = join(prev_region_folder, "new_labels", 'selected_labels_set.tif')
+        old_tiff_all = join(prev_region_folder, "new_labels", 'all_labels_set.tif')
+        
+        OLD_SELECTED_LABELS_FILE = old_gpkg_selected if exists(old_gpkg_selected) else old_tiff_selected
+        OLD_ALL_LABELS_FILE = old_gpkg_all if exists(old_gpkg_all) else old_tiff_all
 
-
-    old_selected_labels = read_tiff(OLD_SELECTED_LABELS_FILE)
-    old_all_labels = read_tiff(OLD_ALL_LABELS_FILE)
-
-
-    ground_truth_segmentation = read_tiff(args.train_segmentation_path)
-
-    all_labels_set, selected_labels_set = get_new_segmentation_sample(
-        ground_truth_map = ground_truth_segmentation,
-        old_all_labels = old_all_labels,
-        old_selected_labels = old_selected_labels,
-        new_pred_map = new_pred_map, 
-        new_prob_map = new_prob_map, 
-        new_depth_map = new_depth_map,
-        prob_thr = args.prob_thr,
-        depth_thr = args.depth_thr,
-        sigma=args.sigma,
-        args=args
-    )
-
-    ##### SAVE NEW LABELS ####
-    image_metadata = get_image_metadata(OLD_SELECTED_LABELS_FILE)
+    # Load labels
+    reference_tiff = train_seg_path
     
-    check_folder(dirname(ALL_LABELS_OUPUT_PATH))
-
-    array2raster(ALL_LABELS_OUPUT_PATH, all_labels_set, image_metadata, "Byte")
-
-
-    check_folder(dirname(SELECTED_LABELS_OUTPUT_PATH))
-
-    array2raster(SELECTED_LABELS_OUTPUT_PATH, selected_labels_set, image_metadata, "Byte")
+    if OLD_SELECTED_LABELS_FILE.endswith('.gpkg'):
+        import geopandas as gpd
+        meta = get_image_metadata(reference_tiff)
+        shape = (meta['height'], meta['width'])
+        transform = meta.get('transform')
+        
+        old_selected_gdf = gpd.read_file(OLD_SELECTED_LABELS_FILE)
+        old_selected_labels = geodataframe_to_raster(old_selected_gdf, shape, transform)
+    else:
+        old_selected_labels = read_tiff(OLD_SELECTED_LABELS_FILE)
     
-def generate_distance_map_for_first_iteration(current_iter_folder:str, args:dict):
-    
-    logger.info(f"============ Generating Distance Map ============")
+    if OLD_ALL_LABELS_FILE.endswith('.gpkg'):
+        import geopandas as gpd
+        meta = get_image_metadata(reference_tiff)
+        shape = (meta['height'], meta['width'])
+        transform = meta.get('transform')
+        
+        old_all_gdf = gpd.read_file(OLD_ALL_LABELS_FILE)
+        old_all_labels = geodataframe_to_raster(old_all_gdf, shape, transform)
+    else:
+        old_all_labels = read_tiff(OLD_ALL_LABELS_FILE)
 
-    TEST_SEGMENTATION_PATH = args.test_segmentation_path
-    TEST_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "test_distance_map.tif")
-    check_folder(dirname(TEST_DISTANCE_MAP_OUTPUT))
+    ground_truth_segmentation = read_tiff(train_seg_path)
 
-    logger.info(f"Generating train distance map")
-    TRAIN_SEGMENTATION_PATH  = args.train_segmentation_path
-    TRAIN_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "train_distance_map.tif")
-    check_folder(dirname(TRAIN_DISTANCE_MAP_OUTPUT))
-    
-    FULL_DISTANCE_MAP_OUTPUT = join(current_iter_folder, "distance_map", "full_distance_map.tif")
+    # Use vector operations for faster sample selection
+    if USE_VECTOR_OPERATIONS:
+        logger.info("Using vector-based sample selection (optimized)")
+        all_labels_set, selected_labels_set = get_new_segmentation_sample_vector(
+            ground_truth_map=ground_truth_segmentation,
+            old_all_labels=old_all_labels,
+            old_selected_labels=old_selected_labels,
+            new_pred_map=new_pred_map, 
+            new_prob_map=new_prob_map, 
+            new_depth_map=new_depth_map,
+            prob_thr=args.prob_thr,
+            depth_thr=args.depth_thr,
+            sigma=args.sigma,
+            args=args,
+            reference_tiff=reference_tiff,
+            output_as_raster=True,
+        )
+    else:
+        logger.info("Using raster-based sample selection (original)")
+        all_labels_set, selected_labels_set = get_new_segmentation_sample(
+            ground_truth_map=ground_truth_segmentation,
+            old_all_labels=old_all_labels,
+            old_selected_labels=old_selected_labels,
+            new_pred_map=new_pred_map, 
+            new_prob_map=new_prob_map, 
+            new_depth_map=new_depth_map,
+            prob_thr=args.prob_thr,
+            depth_thr=args.depth_thr,
+            sigma=args.sigma,
+            args=args
+        )
 
-    # Create processes for test and train distance map generation
-    test_process = Process(target=generate_distance_map, args=(TEST_SEGMENTATION_PATH, TEST_DISTANCE_MAP_OUTPUT, args.sigma))
-    train_process = Process(target=generate_distance_map, args=(TRAIN_SEGMENTATION_PATH, TRAIN_DISTANCE_MAP_OUTPUT, args.sigma))
+    # Save new labels
+    if OLD_SELECTED_LABELS_FILE.endswith('.gpkg'):
+        image_metadata = get_image_metadata(reference_tiff)
+    else:
+        image_metadata = get_image_metadata(OLD_SELECTED_LABELS_FILE)
     
-    # Start the processes
-    test_process.start()
-    train_process.start()
+    check_folder(output_folder)
     
-    # Wait for both processes to finish
-    test_process.join()
-    train_process.join()
+    logger.info("Saving labels as GeoPackage...")
+    save_labels_as_geopackage(all_labels_set, ALL_LABELS_GPKG_PATH, reference_tiff)
+    save_labels_as_geopackage(selected_labels_set, SELECTED_LABELS_GPKG_PATH, reference_tiff)
 
-    test_distance_map = read_tiff(TEST_DISTANCE_MAP_OUTPUT)
-    train_distance_map = read_tiff(TRAIN_DISTANCE_MAP_OUTPUT)
+    logger.info("Saving labels as TIFF (for training)...")
+    array2raster(ALL_LABELS_TIFF_PATH, all_labels_set, image_metadata, "Byte")
+    array2raster(SELECTED_LABELS_TIFF_PATH, selected_labels_set, image_metadata, "Byte")
     
-    train_metadata = get_image_metadata(TRAIN_SEGMENTATION_PATH)
+    logger.info(f"Region {region_idx} labels saved to {output_folder}")
+    
+    # Clean up memory
+    del all_labels_set, selected_labels_set, new_pred_map, new_prob_map, new_depth_map
+    gc.collect()
+    
+def generate_distance_map_for_first_iteration(current_iter_folder: str, args: dict):
+    """
+    Generate distance maps for the first iteration (from ground truth) for all regions.
+    
+    Now uses the optimized vectorized distance map generation.
+    Supports multiple regions.
+    """
+    num_regions = getattr(args, 'num_regions', 1)
+    logger.info(f"============ Generating Distance Map for {num_regions} region(s) (Optimized) ============")
 
-    full_distance_map = np.maximum(test_distance_map, train_distance_map)
-    array2raster(FULL_DISTANCE_MAP_OUTPUT, full_distance_map, train_metadata, "float32")
+    # Use the optimized distance map generation
+    distance_map_func = generate_distance_map_fast if USE_VECTOR_OPERATIONS else generate_distance_map
+    
+    processes = []
+    
+    for region_idx in range(num_regions):
+        train_seg_path = args.train_segmentation_paths[region_idx]
+        test_seg_path = args.test_segmentation_paths[region_idx]
+        
+        if num_regions > 1:
+            region_folder = join(current_iter_folder, f"region_{region_idx}")
+            logger.info(f"=== Generating distance maps for Region {region_idx} ===")
+        else:
+            region_folder = current_iter_folder
+        
+        distance_map_folder = join(region_folder, "distance_map")
+        check_folder(distance_map_folder)
+        
+        train_output = join(distance_map_folder, "train_distance_map.tif")
+        test_output = join(distance_map_folder, "test_distance_map.tif")
+        full_output = join(distance_map_folder, "full_distance_map.tif")
+        
+        # Skip if already done
+        if exists(train_output) and exists(test_output):
+            logger.info(f"Region {region_idx} distance maps already exist. Skipping generation...")
+            continue
+        
+        # Create processes for parallel distance map generation
+        if not exists(test_output):
+            test_process = Process(target=distance_map_func, args=(test_seg_path, test_output, args.sigma))
+            processes.append(test_process)
+            test_process.start()
+        
+        if not exists(train_output):
+            train_process = Process(target=distance_map_func, args=(train_seg_path, train_output, args.sigma))
+            processes.append(train_process)
+            train_process.start()
+    
+    # Wait for all processes to finish
+    for p in processes:
+        p.join()
+    
+    # Generate full distance maps for each region
+    for region_idx in range(num_regions):
+        train_seg_path = args.train_segmentation_paths[region_idx]
+        
+        if num_regions > 1:
+            region_folder = join(current_iter_folder, f"region_{region_idx}")
+        else:
+            region_folder = current_iter_folder
+        
+        distance_map_folder = join(region_folder, "distance_map")
+        train_output = join(distance_map_folder, "train_distance_map.tif")
+        test_output = join(distance_map_folder, "test_distance_map.tif")
+        full_output = join(distance_map_folder, "full_distance_map.tif")
+        
+        if not exists(full_output) and exists(train_output) and exists(test_output):
+            test_distance_map = read_tiff(test_output)
+            train_distance_map = read_tiff(train_output)
+            
+            train_metadata = get_image_metadata(train_seg_path)
+            
+            full_distance_map = np.maximum(test_distance_map, train_distance_map)
+            array2raster(full_output, full_distance_map, train_metadata, "float32")
+            
+            del test_distance_map, train_distance_map, full_distance_map
 
             
 
-def generate_distance_map_for_next_iteration(current_iter_folder, args:dict):
+def generate_distance_map_for_next_iteration(current_iter_folder: str, args: dict):
+    """
+    Generate distance maps for the next iteration from new labels for all regions.
+    
+    Now supports both GeoPackage and TIFF inputs with optimized generation.
+    Supports multiple regions.
+    """
+    num_regions = getattr(args, 'num_regions', 1)
+    
+    logger.info(f"============ Generating Distance Maps for {num_regions} region(s) ============")
+    
+    for region_idx in range(num_regions):
+        generate_distance_map_for_region(current_iter_folder, args, region_idx)
 
-    ALL_LABELS_PATH = join(current_iter_folder, "new_labels", f'all_labels_set.tif')
-    SELECTED_LABELS_PATH = join(current_iter_folder, "new_labels", f'selected_labels_set.tif')
-    
-    
-    ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH = join(current_iter_folder, "distance_map", f'all_labels_distance_map.tif')
-    
-    SELECTED_LABELS_DISTANCE_MAP_OUPTPUT_PATH  = join(current_iter_folder, "distance_map", f'selected_distance_map.tif')
 
-    #######################################
-    ######## GENERATE DISTANCE MAP ########
+def generate_distance_map_for_region(current_iter_folder: str, args: dict, region_idx: int):
+    """
+    Generate distance maps for a single region.
+    
+    Parameters
+    ----------
+    current_iter_folder : str
+        Current iteration folder
+    args : dict
+        Arguments dictionary
+    region_idx : int
+        Index of the region to process
+    """
+    num_regions = getattr(args, 'num_regions', 1)
+    
+    # Determine region folder
+    if num_regions > 1:
+        region_folder = join(current_iter_folder, f"region_{region_idx}")
+        train_seg_path = args.train_segmentation_paths[region_idx]
+        logger.info(f"=== Generating distance maps for Region {region_idx} ===")
+    else:
+        region_folder = current_iter_folder
+        train_seg_path = args.train_segmentation_paths[0]
+    
+    # Check for GeoPackage first, fallback to TIFF
+    ALL_LABELS_GPKG = join(region_folder, "new_labels", 'all_labels_set.gpkg')
+    SELECTED_LABELS_GPKG = join(region_folder, "new_labels", 'selected_labels_set.gpkg')
+    ALL_LABELS_TIFF = join(region_folder, "new_labels", 'all_labels_set.tif')
+    SELECTED_LABELS_TIFF = join(region_folder, "new_labels", 'selected_labels_set.tif')
+    
+    ALL_LABELS_PATH = ALL_LABELS_GPKG if exists(ALL_LABELS_GPKG) else ALL_LABELS_TIFF
+    SELECTED_LABELS_PATH = SELECTED_LABELS_GPKG if exists(SELECTED_LABELS_GPKG) else SELECTED_LABELS_TIFF
+    
+    distance_map_folder = join(region_folder, "distance_map")
+    ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH = join(distance_map_folder, 'all_labels_distance_map.tif')
+    SELECTED_LABELS_DISTANCE_MAP_OUTPUT_PATH = join(distance_map_folder, 'selected_distance_map.tif')
+
+    # Use the optimized or original function based on flag
+    distance_map_func = generate_distance_map_fast if USE_VECTOR_OPERATIONS else generate_distance_map
+
     if not exists(ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH):
-        logger.info(f"Generating distance map and saving at {ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH}")
+        logger.info(f"Generating distance map at {ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH}")
+        check_folder(distance_map_folder)
 
-        check_folder(dirname(ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH))
+        if ALL_LABELS_PATH.endswith('.gpkg'):
+            from generate_distance_map_vector import generate_distance_map_from_geopackage
+            generate_distance_map_from_geopackage(
+                ALL_LABELS_PATH, 
+                ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH,
+                reference_tiff=train_seg_path,
+                sigma=args.sigma
+            )
+        else:
+            distance_map_func(ALL_LABELS_PATH, ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH, args.sigma)
 
-        generate_distance_map(ALL_LABELS_PATH, ALL_LABELS_DISTANCE_MAP_OUTPUT_PATH, args.sigma)
+    if not exists(SELECTED_LABELS_DISTANCE_MAP_OUTPUT_PATH):
+        logger.info(f"Generating distance map at {SELECTED_LABELS_DISTANCE_MAP_OUTPUT_PATH}")
+        check_folder(distance_map_folder)
+
+        if SELECTED_LABELS_PATH.endswith('.gpkg'):
+            from generate_distance_map_vector import generate_distance_map_from_geopackage
+            generate_distance_map_from_geopackage(
+                SELECTED_LABELS_PATH, 
+                SELECTED_LABELS_DISTANCE_MAP_OUTPUT_PATH,
+                reference_tiff=train_seg_path,
+                sigma=args.sigma
+            )
+        else:
+            distance_map_func(SELECTED_LABELS_PATH, SELECTED_LABELS_DISTANCE_MAP_OUTPUT_PATH, args.sigma)
     
 
-    if not exists(SELECTED_LABELS_DISTANCE_MAP_OUPTPUT_PATH):
-        logger.info(f"Generating distance map and saving at {SELECTED_LABELS_DISTANCE_MAP_OUPTPUT_PATH}")
 
-        check_folder(dirname(SELECTED_LABELS_DISTANCE_MAP_OUPTPUT_PATH))
-
-        generate_distance_map(SELECTED_LABELS_PATH, SELECTED_LABELS_DISTANCE_MAP_OUPTPUT_PATH, args.sigma)
+def compile_metrics(current_iter_folder: str, args: dict):
+    """Compile metrics for all regions.
     
-
-
-def compile_metrics(current_iter_folder, args):
+    Supports multiple regions and creates both per-region and aggregated metrics.
+    Also computes GLOBAL metrics combining all regions together.
+    """
+    num_regions = getattr(args, 'num_regions', 1)
     
-    METRICS_TEST_PATH = join(current_iter_folder, "test_metrics.yaml")
-    METRICS_TRAIN_PATH = join(current_iter_folder, "train_metrics.yaml")
+    logger.info(f"============ Compiling Metrics for {num_regions} region(s) ============")
     
-    if exists(METRICS_TEST_PATH) and exists(METRICS_TRAIN_PATH):
-        return
+    all_metrics_test = {}
+    all_metrics_train = {}
+    
+    # Lists to accumulate data for global metrics calculation
+    all_pred_test_pixels = []
+    all_gt_test_pixels = []
+    all_pred_train_pixels = []
+    all_gt_train_pixels = []
+    
+    for region_idx in range(num_regions):
+        if num_regions > 1:
+            region_folder = join(current_iter_folder, f"region_{region_idx}")
+            test_seg_path = args.test_segmentation_paths[region_idx]
+            train_seg_path = args.train_segmentation_paths[region_idx]
+            logger.info(f"=== Compiling metrics for Region {region_idx} ===")
+        else:
+            region_folder = current_iter_folder
+            test_seg_path = args.test_segmentation_paths[0]
+            train_seg_path = args.train_segmentation_paths[0]
+        
+        METRICS_TEST_PATH = join(region_folder, "test_metrics.yaml")
+        METRICS_TRAIN_PATH = join(region_folder, "train_metrics.yaml")
 
-    logger.info("============ Compiling Metrics ============")
-    GROUND_TRUTH_TEST_PATH = args.test_segmentation_path
-    ground_truth_test = read_tiff(GROUND_TRUTH_TEST_PATH)
+        ground_truth_test = read_tiff(test_seg_path)
+        ground_truth_train = read_tiff(train_seg_path)
 
-    GROUND_TRUTH_TRAIN_PATH = args.train_segmentation_path
-    ground_truth_train = read_tiff(GROUND_TRUTH_TRAIN_PATH)
+        PRED_PATH = join(region_folder, "raster_prediction", f"join_class_{np.sum(args.overlap)}.TIF")
+        predicted_seg = read_tiff(PRED_PATH)
 
-    PRED_PATH = join(current_iter_folder, "raster_prediction", f"join_class_{np.sum(args.overlap)}.TIF")
-    predicted_seg = read_tiff(PRED_PATH)
+        # Accumulate masked pixels for global metrics
+        if num_regions > 1:
+            # Test pixels
+            test_mask = ground_truth_test > 0
+            all_gt_test_pixels.append(ground_truth_test[test_mask].flatten())
+            all_pred_test_pixels.append((predicted_seg[test_mask] + 1).flatten())
+            
+            # Train pixels
+            train_mask = ground_truth_train > 0
+            all_gt_train_pixels.append(ground_truth_train[train_mask].flatten())
+            all_pred_train_pixels.append((predicted_seg[train_mask] + 1).flatten())
+        
+        # Skip per-region metrics if already computed
+        if exists(METRICS_TEST_PATH) and exists(METRICS_TRAIN_PATH):
+            logger.info(f"Region {region_idx} metrics already exist. Skipping per-region calculation...")
+            del ground_truth_test, ground_truth_train, predicted_seg
+            continue
 
-    ### Save test metrics ###
-    metrics_test = evaluate_metrics(predicted_seg, ground_truth_test)
-    metrics_test = {f"test/{key}": value for key, value in metrics_test.items()}.copy()
+        # Test metrics
+        metrics_test = evaluate_metrics(predicted_seg, ground_truth_test)
+        if num_regions > 1:
+            metrics_test = {f"region_{region_idx}/test/{key}": value for key, value in metrics_test.items()}
+        else:
+            metrics_test = {f"test/{key}": value for key, value in metrics_test.items()}
+        
+        wandb.log(metrics_test)
+        save_yaml(metrics_test, METRICS_TEST_PATH)
+        all_metrics_test.update(metrics_test)
+        
+        # Train metrics
+        metrics_train = evaluate_metrics(predicted_seg, ground_truth_train, args.nb_class)
+        if num_regions > 1:
+            metrics_train = {f"region_{region_idx}/train/{key}": value for key, value in metrics_train.items()}
+        else:
+            metrics_train = {f"train/{key}": value for key, value in metrics_train.items()}
+        
+        wandb.log(metrics_train)
+        save_yaml(metrics_train, METRICS_TRAIN_PATH)
+        all_metrics_train.update(metrics_train)
+        
+        del ground_truth_test, ground_truth_train, predicted_seg
     
-    wandb.log(metrics_test)
-    
-    save_yaml(metrics_test, METRICS_TEST_PATH) 
-
-    
-    ### Save train metrics ###
-    metrics_train = evaluate_metrics(predicted_seg, ground_truth_train, args.nb_class)
-    metrics_train = {f"train/{key}": value for key, value in metrics_train.items()}.copy()
-    
-    wandb.log(metrics_train)
-    
-    save_yaml(metrics_train, METRICS_TRAIN_PATH)
+    # Save aggregated metrics and compute GLOBAL metrics if multiple regions
+    if num_regions > 1:
+        aggregated_metrics_path = join(current_iter_folder, "aggregated_metrics.yaml")
+        global_metrics_path = join(current_iter_folder, "global_metrics.yaml")
+        
+        # Compute GLOBAL metrics combining all regions
+        if not exists(global_metrics_path) and len(all_gt_test_pixels) > 0:
+            logger.info("=== Computing GLOBAL metrics for all regions combined ===")
+            
+            from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score, cohen_kappa_score
+            
+            # Concatenate all pixels from all regions
+            global_gt_test = np.concatenate(all_gt_test_pixels)
+            global_pred_test = np.concatenate(all_pred_test_pixels)
+            global_gt_train = np.concatenate(all_gt_train_pixels)
+            global_pred_train = np.concatenate(all_pred_train_pixels)
+            
+            # Use only classes that EXIST in the ground truth (avoid inflated metrics from non-existent classes)
+            test_labels = np.unique(global_gt_test).tolist()
+            train_labels = np.unique(global_gt_train).tolist()
+            logger.info(f"Classes in test GT: {test_labels}")
+            logger.info(f"Classes in train GT: {train_labels}")
+            
+            # Global TEST metrics (using only existing classes, zero_division=0 to avoid inflation)
+            global_test_metrics = {
+                "global/test/Accuracy": float(np.round(accuracy_score(global_gt_test, global_pred_test) * 100, 2)),
+                "global/test/avgF1": float(f1_score(global_gt_test, global_pred_test, average="macro", zero_division=0, labels=test_labels)) * 100,
+                "global/test/avgF1_weighted": float(f1_score(global_gt_test, global_pred_test, average="weighted", zero_division=0)) * 100,
+                "global/test/avgPre": float(precision_score(global_gt_test, global_pred_test, average="macro", zero_division=0, labels=test_labels)) * 100,
+                "global/test/avgRec": float(recall_score(global_gt_test, global_pred_test, average="macro", zero_division=0, labels=test_labels)) * 100,
+                "global/test/F1": (f1_score(global_gt_test, global_pred_test, average=None, zero_division=0, labels=test_labels) * 100).tolist(),
+                "global/test/Pre": (precision_score(global_gt_test, global_pred_test, average=None, zero_division=0, labels=test_labels) * 100).tolist(),
+                "global/test/Rec": (recall_score(global_gt_test, global_pred_test, average=None, zero_division=0, labels=test_labels) * 100).tolist(),
+                "global/test/classes": test_labels,
+                "global/test/KappaScore": float(cohen_kappa_score(global_gt_test, global_pred_test, labels=test_labels)) * 100,
+            }
+            
+            # Global TRAIN metrics (using only existing classes)
+            global_train_metrics = {
+                "global/train/Accuracy": float(np.round(accuracy_score(global_gt_train, global_pred_train) * 100, 2)),
+                "global/train/avgF1": float(f1_score(global_gt_train, global_pred_train, average="macro", zero_division=0, labels=train_labels)) * 100,
+                "global/train/avgF1_weighted": float(f1_score(global_gt_train, global_pred_train, average="weighted", zero_division=0)) * 100,
+                "global/train/avgPre": float(precision_score(global_gt_train, global_pred_train, average="macro", zero_division=0, labels=train_labels)) * 100,
+                "global/train/avgRec": float(recall_score(global_gt_train, global_pred_train, average="macro", zero_division=0, labels=train_labels)) * 100,
+                "global/train/F1": (f1_score(global_gt_train, global_pred_train, average=None, zero_division=0, labels=train_labels) * 100).tolist(),
+                "global/train/Pre": (precision_score(global_gt_train, global_pred_train, average=None, zero_division=0, labels=train_labels) * 100).tolist(),
+                "global/train/Rec": (recall_score(global_gt_train, global_pred_train, average=None, zero_division=0, labels=train_labels) * 100).tolist(),
+                "global/train/classes": train_labels,
+                "global/train/KappaScore": float(cohen_kappa_score(global_gt_train, global_pred_train, labels=train_labels)) * 100,
+            }
+            
+            global_metrics = {**global_test_metrics, **global_train_metrics}
+            
+            wandb.log(global_metrics)
+            save_yaml(global_metrics, global_metrics_path)
+            
+            logger.info(f"Global Test F1-score: {global_test_metrics['global/test/avgF1']:.2f}%")
+            logger.info(f"Global Train F1-score: {global_train_metrics['global/train/avgF1']:.2f}%")
+            
+            # Add global metrics to all_metrics
+            all_metrics_test.update(global_test_metrics)
+            all_metrics_train.update(global_train_metrics)
+            
+            del global_gt_test, global_pred_test, global_gt_train, global_pred_train
+        
+        # Save aggregated metrics (per-region + global)
+        if not exists(aggregated_metrics_path):
+            all_metrics = {**all_metrics_test, **all_metrics_train}
+            save_yaml(all_metrics, aggregated_metrics_path)
 
  
 
-def compile_component_metrics(current_iter_folder, args):
+def compile_component_metrics(current_iter_folder: str, args: dict):
+    """
+    Compile component-level metrics for all regions.
     
+    Now supports loading from GeoPackage for faster vector-based statistics.
+    Supports multiple regions.
+    """
+    num_regions = getattr(args, 'num_regions', 1)
     current_iter_num = int(current_iter_folder.split("_")[-1])
-    GROUND_TRUTH_TEST_PATH = args.test_segmentation_path
-    ground_truth_test = read_tiff(GROUND_TRUTH_TEST_PATH)
     
-    ### Save test component metrics ###
-    COMPONENTS_PRECISION_METRICS_PATH = join(current_iter_folder,'all_labels_test_metrics.yaml')
-    COMPONENTS_STATS_PATH = join(current_iter_folder, "all_labels_stats.parquet")
+    logger.info(f"============ Compiling Component Metrics for {num_regions} region(s) ============")
     
-    if exists(COMPONENTS_PRECISION_METRICS_PATH) and exists(COMPONENTS_STATS_PATH):
-        return
+    all_stats_list = []
     
-    logger.info("============ Compiling Component Metrics ============")
-    
-    all_labels = read_tiff(join(current_iter_folder, "new_labels", "all_labels_set.tif"))
+    for region_idx in range(num_regions):
+        if num_regions > 1:
+            region_folder = join(current_iter_folder, f"region_{region_idx}")
+            test_seg_path = args.test_segmentation_paths[region_idx]
+            logger.info(f"=== Compiling component metrics for Region {region_idx} ===")
+        else:
+            region_folder = current_iter_folder
+            test_seg_path = args.test_segmentation_paths[0]
+        
+        COMPONENTS_PRECISION_METRICS_PATH = join(region_folder, 'all_labels_test_metrics.yaml')
+        COMPONENTS_STATS_PATH = join(region_folder, "all_labels_stats.parquet")
+        
+        if exists(COMPONENTS_PRECISION_METRICS_PATH) and exists(COMPONENTS_STATS_PATH):
+            logger.info(f"Region {region_idx} component metrics already exist. Skipping...")
+            continue
+        
+        ground_truth_test = read_tiff(test_seg_path)
+        
+        # Try GeoPackage first, fallback to TIFF
+        ALL_LABELS_GPKG = join(region_folder, "new_labels", "all_labels_set.gpkg")
+        ALL_LABELS_TIFF = join(region_folder, "new_labels", "all_labels_set.tif")
+        
+        if exists(ALL_LABELS_GPKG) and USE_VECTOR_OPERATIONS:
+            import geopandas as gpd
+            logger.info("Loading labels from GeoPackage for fast statistics")
+            all_labels_gdf = gpd.read_file(ALL_LABELS_GPKG)
+            
+            meta = get_image_metadata(test_seg_path)
+            shape = (meta['height'], meta['width'])
+            transform = meta.get('transform')
+            all_labels = geodataframe_to_raster(all_labels_gdf, shape, transform)
+            
+            all_labels_stats = get_components_stats_vector(all_labels_gdf)
+        else:
+            all_labels = read_tiff(ALL_LABELS_TIFF)
+            all_labels_stats = get_components_stats(label(all_labels), all_labels).reset_index()
 
-    ### EVALUATE COMPONENT PRECISION METRICS ###
-    all_labels_metrics = evaluate_component_metrics(ground_truth_test, all_labels, args.nb_class)
+        # Evaluate component precision metrics
+        all_labels_metrics = evaluate_component_metrics(ground_truth_test, all_labels, args.nb_class)
+        
+        if num_regions > 1:
+            all_labels_metrics = {f"region_{region_idx}/all_labels_{key}": value for key, value in all_labels_metrics.items()}
+        else:
+            all_labels_metrics = {f"all_labels_{key}": value for key, value in all_labels_metrics.items()}
+        
+        all_labels_stats["iter"] = f"iter_{current_iter_num:03d}"
+        all_labels_stats["iter_num"] = current_iter_num
+        all_labels_stats["region"] = region_idx
+        
+        # Save metrics
+        save_yaml(all_labels_metrics, COMPONENTS_PRECISION_METRICS_PATH)
+        all_labels_stats.to_parquet(COMPONENTS_STATS_PATH)
+        
+        all_stats_list.append(all_labels_stats)
+        
+        del ground_truth_test, all_labels
     
-    all_labels_metrics = {f"all_labels_{key}": value for key, value in all_labels_metrics.items()}.copy()
-    
-    ### EVALUATE COMPONENT STATS: AREA, PERIMETER, ETC ###
-    all_labels_stats = get_components_stats(label(all_labels), all_labels).reset_index()
-    
-    all_labels_stats["iter"] = f"iter_{current_iter_num:03d}"
-    all_labels_stats["iter_num"] = current_iter_num
-    
-    ##### SAVE METRICS ####
-    save_yaml(all_labels_metrics, COMPONENTS_PRECISION_METRICS_PATH)
-    all_labels_stats.to_parquet(COMPONENTS_STATS_PATH)
+    # Save aggregated stats if multiple regions
+    if num_regions > 1 and all_stats_list:
+        aggregated_stats_path = join(current_iter_folder, "all_regions_stats.parquet")
+        if not exists(aggregated_stats_path):
+            aggregated_stats = pd.concat(all_stats_list, ignore_index=True)
+            aggregated_stats.to_parquet(aggregated_stats_path)
 
 
 
@@ -860,13 +1416,16 @@ if __name__ == "__main__":
     fix_random_seeds(args.seed)
 
     
+    num_regions = getattr(args, 'num_regions', 1)
+    logger.info(f"Running with {num_regions} region(s)")
+    
     while True:
 
         print_sucess("Working ON:")
         print_sucess(get_device()) 
         
-        # get current iteration folder
-        current_iter_folder = get_current_iter_folder(args.data_path, args.overlap)
+        # get current iteration folder (checks all regions)
+        current_iter_folder = get_current_iter_folder(args.data_path, args.overlap, num_regions)
         current_iter = int(current_iter_folder.split("_")[-1])
 
         if current_iter > args.num_iter:
@@ -880,8 +1439,15 @@ if __name__ == "__main__":
             generate_distance_map_for_first_iteration(current_iter_folder, args)
             
             logger.info("Generating labels view for iter 0")
-
-            generate_labels_view(current_iter_folder, args.ortho_image, args.train_segmentation_path)
+            
+            # Generate visualization for each region
+            for region_idx in range(num_regions):
+                if num_regions > 1:
+                    region_folder = join(current_iter_folder, f"region_{region_idx}")
+                    check_folder(region_folder)
+                else:
+                    region_folder = current_iter_folder
+                generate_labels_view(region_folder, args.ortho_images[region_idx], args.train_segmentation_paths[region_idx])
     
             logger.info("Done!")
             continue
@@ -909,9 +1475,14 @@ if __name__ == "__main__":
 
         #############################################
 
-        delete_useless_files(current_iter_folder = current_iter_folder)
-        
-        generate_labels_view(current_iter_folder, args.ortho_image, args.train_segmentation_path)
+        # Delete useless files for each region
+        for region_idx in range(num_regions):
+            if num_regions > 1:
+                region_folder = join(current_iter_folder, f"region_{region_idx}")
+            else:
+                region_folder = current_iter_folder
+            delete_useless_files(current_iter_folder=region_folder)
+            generate_labels_view(region_folder, args.ortho_images[region_idx], args.train_segmentation_paths[region_idx])
 
         print_sucess("Distance map generated")
  

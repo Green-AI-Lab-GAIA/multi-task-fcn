@@ -11,9 +11,28 @@ from src.utils import check_folder, run_in_process, run_in_thread
 
 
 # generate view only for sythentic labels
-def generate_view_for_sythentic_label(current_iter_folder:str, train_segmentation_path:str, orthoimage_path:str):
-
-    current_iter = int(current_iter_folder.split("iter_")[-1])
+def generate_view_for_sythentic_label(current_iter_folder: str, train_segmentation_path: str, orthoimage_path: str, region_suffix: str = ""):
+    """Generate visualization for synthetic labels (predictions not in ground truth).
+    
+    Parameters
+    ----------
+    current_iter_folder : str
+        Path to iteration folder (or region folder for multi-region)
+    train_segmentation_path : str
+        Path to ground truth segmentation
+    orthoimage_path : str
+        Path to orthoimage
+    region_suffix : str
+        Suffix for multi-region support
+    """
+    # Handle both iter folder and region folder formats
+    folder_name = current_iter_folder.split("/")[-1].split("\\")[-1]
+    if folder_name.startswith("region_"):
+        parent_folder = dirname(current_iter_folder)
+        current_iter = int(parent_folder.split("iter_")[-1].split("/")[0].split("\\")[0])
+        region_suffix = f"_{folder_name}"
+    else:
+        current_iter = int(current_iter_folder.split("iter_")[-1].split("/")[0].split("\\")[0])
     
     if current_iter == 0:
         ALL_LABELS_PATH = join(train_segmentation_path)
@@ -27,9 +46,13 @@ def generate_view_for_sythentic_label(current_iter_folder:str, train_segmentatio
 
     synthetic_labels = np.where(TRAIN_GT_MAP > 0, 0, ALL_LABELS_MAP)
     
-    # folder to save view
-    OUTPUT_MAP_FOLDER = join(dirname(current_iter_folder), "visualization", "synthetic_all_labels")
-    # create folder if it doesnt exists
+    # folder to save view - go up from region folder if needed
+    if folder_name.startswith("region_"):
+        base_folder = dirname(dirname(current_iter_folder))
+    else:
+        base_folder = dirname(current_iter_folder)
+    
+    OUTPUT_MAP_FOLDER = join(base_folder, "visualization", "synthetic_all_labels")
     check_folder(OUTPUT_MAP_FOLDER)
 
 
@@ -38,8 +61,18 @@ def generate_view_for_sythentic_label(current_iter_folder:str, train_segmentatio
     ORTHOIMAGE = read_tiff(orthoimage_path)
     ORTHOIMAGE = np.moveaxis(ORTHOIMAGE, 0, 2)
     
-    if ORTHOIMAGE.shape[-1] == 25:
+    # Select appropriate bands based on number of channels
+    num_channels = ORTHOIMAGE.shape[-1]
+    if num_channels == 25:
+        # Hyperspectral - use bands 5, 3, 2
         ORTHOIMAGE = ORTHOIMAGE[..., [5,3,2]].copy()
+    elif num_channels == 4:
+        # 4-band image (e.g., RGB + NIR) - use first 3 bands (RGB)
+        ORTHOIMAGE = ORTHOIMAGE[..., [0,1,2]].copy()
+    elif num_channels > 3:
+        # Multi-band - use first 3 bands
+        ORTHOIMAGE = ORTHOIMAGE[..., [0,1,2]].copy()
+    # If 3 or less bands, keep as is
     
     if ORTHOIMAGE.max() > 255:
         ORTHOIMAGE = np.divide(ORTHOIMAGE, np.quantile(ORTHOIMAGE, 0.99, axis=(0,1)))
@@ -52,28 +85,38 @@ def generate_view_for_sythentic_label(current_iter_folder:str, train_segmentatio
         plt.plot(contour[:, 1], contour[:, 0], linewidth=0.3, color = "red", label = "Prediction")
 
     plt.axis('off')
-    plt.savefig(join(OUTPUT_MAP_FOLDER, f"{current_iter:03d}_segmentation.png"), bbox_inches='tight', pad_inches=0)
+    plt.savefig(join(OUTPUT_MAP_FOLDER, f"{current_iter:03d}{region_suffix}_segmentation.png"), bbox_inches='tight', pad_inches=0)
     plt.close()
 
 
 
-def generate_labels_view(current_iter_folder:str, orthoimage_path:str, train_segmentation_path:str):
+def generate_labels_view(current_iter_folder: str, orthoimage_path: str, train_segmentation_path: str, region_suffix: str = ""):
     """Function to generate images for qualitative evaluation.
     These images are not used for any kind of numeric evaluation.
 
     Parameters
     ----------
     current_iter_folder : str
-        Path to iteration folder
+        Path to iteration folder (or region folder for multi-region)
     
     orthoimage_path : str
         Path to remote sensing orthoimage
     
     train_segmentation_path : str
         Path to ground_truth segmentation used for train
+    
+    region_suffix : str, optional
+        Suffix to add to filenames for multi-region support (e.g., "_region_0")
     """
-
-    current_iter = int(current_iter_folder.split("iter_")[-1])
+    # Handle both iter folder and region folder formats
+    folder_name = current_iter_folder.split("/")[-1].split("\\")[-1]
+    if folder_name.startswith("region_"):
+        # This is a region folder, get iter from parent
+        parent_folder = dirname(current_iter_folder)
+        current_iter = int(parent_folder.split("iter_")[-1].split("/")[0].split("\\")[0])
+        region_suffix = f"_{folder_name}"
+    else:
+        current_iter = int(current_iter_folder.split("iter_")[-1].split("/")[0].split("\\")[0])
 
     if current_iter == 0:
         ALL_LABELS_PATH = train_segmentation_path
@@ -114,7 +157,7 @@ def generate_labels_view(current_iter_folder:str, orthoimage_path:str, train_seg
     fig, ax = plt.subplots(dpi = 1200)
     ax.imshow(ALL_LABELS_MAP, cmap=DEFAULT_COLORS, interpolation="bilinear")
     ax.axis('off')
-    fig.savefig(join(ALL_LABELS_OUT_FOLDER, f"{current_iter:03d}_segmentation.png"), bbox_inches='tight', pad_inches=0)
+    fig.savefig(join(ALL_LABELS_OUT_FOLDER, f"{current_iter:03d}{region_suffix}_segmentation.png"), bbox_inches='tight', pad_inches=0)
     plt.close(fig)
 
 
@@ -125,7 +168,7 @@ def generate_labels_view(current_iter_folder:str, orthoimage_path:str, train_seg
     fig, ax = plt.subplots(dpi = 1200)
     ax.imshow(SELECTED_LABELS_MAP, cmap=DEFAULT_COLORS)
     ax.axis('off')
-    fig.savefig(join(SELECTED_LABELS_OUT_FOLDER, f"{current_iter:03d}_segmentation.png"), bbox_inches='tight', pad_inches=0)
+    fig.savefig(join(SELECTED_LABELS_OUT_FOLDER, f"{current_iter:03d}{region_suffix}_segmentation.png"), bbox_inches='tight', pad_inches=0)
     plt.close(fig)
     gc.collect()
 

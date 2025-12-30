@@ -285,10 +285,20 @@ def plot_figures(img_mult:np.ndarray, ref:np.ndarray, pred:np.ndarray, depth:np.
     # Load the first 5 images in the batch
     batch = np.minimum(5, img_mult.shape[0])
 
-    if img_mult.shape[1] > 3:
-        img_mult = img_mult[:batch,[5,3,2],:,:]
+    # Select appropriate bands based on number of channels
+    num_channels = img_mult.shape[1]
     
+    if num_channels == 25:
+        # Hyperspectral image - use bands 5, 3, 2 (original behavior)
+        img_mult = img_mult[:batch,[5,3,2],:,:]
+    elif num_channels == 4:
+        # 4-band image (e.g., RGB + NIR or RGBA) - use first 3 bands (RGB)
+        img_mult = img_mult[:batch,[0,1,2],:,:]
+    elif num_channels >= 3:
+        # Multi-band image - use first 3 bands
+        img_mult = img_mult[:batch,[0,1,2],:,:]
     else:
+        # Less than 3 bands - use all available
         img_mult = img_mult[:batch, :, :, :]
 
     img_mult = np.moveaxis(img_mult, 1, 3)

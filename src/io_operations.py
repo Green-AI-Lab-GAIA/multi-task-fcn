@@ -89,7 +89,7 @@ def read_yaml(yaml_path:str)->dict:
     for key in yaml_attrdict.keys():
         try:
             yaml_attrdict[key] = ast.literal_eval(yaml_attrdict[key])
-        except ast.SyntaxError:
+        except (ValueError, SyntaxError, TypeError):
             pass
 
     return yaml_attrdict
@@ -99,6 +99,7 @@ def load_args(yaml_path:str)->dict:
     """
     1. Load arguments saved on yaml file.
     2. Convert path inside the args to absolute path
+    3. Normalize multi-region config (singular -> list)
     
     Parameters
     ----------
@@ -115,7 +116,82 @@ def load_args(yaml_path:str)->dict:
     
     fix_relative_paths(args)    
     
+    # Normalize multi-region config
+    args = normalize_multi_region_args(args)
+    
     return args
+
+
+def normalize_multi_region_args(args: dict) -> dict:
+    """Normalize args to always have list-based multi-region config.
+    
+    Converts singular config (ortho_image, train_segmentation_path, etc.)
+    to plural/list format (ortho_images, train_segmentation_paths, etc.)
+    for backwards compatibility.
+    
+    Parameters
+    ----------
+    args : dict
+        Arguments dictionary
+    
+    Returns
+    -------
+    dict
+        Normalized arguments with list-based paths
+    """
+    # Mapping from singular to plural keys
+    path_mappings = {
+        'ortho_image': 'ortho_images',
+        'train_segmentation_path': 'train_segmentation_paths',
+        'test_segmentation_path': 'test_segmentation_paths',
+        'full_segmentation_path': 'full_segmentation_paths',
+        'mask_path': 'mask_paths',
+    }
+    
+    for singular_key, plural_key in path_mappings.items():
+        # If plural key already exists and is a list, use it
+        if plural_key in args and isinstance(args[plural_key], list):
+            # Ensure singular key also exists for backwards compatibility
+            if singular_key not in args:
+                args[singular_key] = args[plural_key][0] if args[plural_key] else None
+        # If only singular key exists, convert to list
+        elif singular_key in args and args[singular_key] is not None:
+            args[plural_key] = [args[singular_key]]
+        # If neither exists, set empty list
+        else:
+            args[plural_key] = []
+    
+    # Add num_regions for convenience
+    if 'ortho_images' in args:
+        args['num_regions'] = len(args['ortho_images'])
+    else:
+        args['num_regions'] = 0
+    
+    return args
+
+
+def get_region_paths(args: dict, region_idx: int) -> dict:
+    """Get paths for a specific region.
+    
+    Parameters
+    ----------
+    args : dict
+        Normalized arguments dictionary
+    region_idx : int
+        Index of the region (0-based)
+    
+    Returns
+    -------
+    dict
+        Dictionary with paths for the specified region
+    """
+    return {
+        'ortho_image': args['ortho_images'][region_idx],
+        'train_segmentation_path': args['train_segmentation_paths'][region_idx],
+        'test_segmentation_path': args['test_segmentation_paths'][region_idx],
+        'full_segmentation_path': args['full_segmentation_paths'][region_idx] if args.get('full_segmentation_paths') else None,
+        'mask_path': args['mask_paths'][region_idx] if args.get('mask_paths') else None,
+    }
 
 
 

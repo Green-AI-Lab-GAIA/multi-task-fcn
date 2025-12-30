@@ -441,7 +441,8 @@ def filter_map_by_depth_prob(pred_map:np.ndarray, prob_map:np.ndarray, depth_map
     prob_gauss = gaussian_filter(prob_map, sigma = sigma)
 
     # Selection the image
-    mask = (depth_gauss > depth_thr) & (prob_gauss > prob_thr)
+    # mask = (depth_gauss > depth_thr) & (prob_gauss > prob_thr)
+    mask = (depth_gauss + prob_gauss) > (depth_thr + prob_thr)
     
     pred_map = np.where(mask, pred_map, 0)
 
