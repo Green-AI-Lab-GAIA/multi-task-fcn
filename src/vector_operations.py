@@ -36,7 +36,7 @@ from tqdm import tqdm
 ROOT_PATH = dirname(dirname(__file__))
 sys.path.append(ROOT_PATH)
 
-from src.io_operations import get_image_metadata, read_tiff
+from src.io_operations import get_image_metadata, read_tiff, get_or_generate_mask_path
 
 logger = getLogger("__main__")
 
@@ -890,10 +890,13 @@ def get_new_segmentation_sample_vector(
         area_in_meters=True,  # Use square meters (m²), CRS-agnostic
     )
     
-    # Filter by mask if provided
-    if args.get('mask_path') and exists(args.get('mask_path')):
-        logger.info("Filtering components by mask")
-        new_pred_gdf = filter_by_mask_vector(new_pred_gdf, args['mask_path'])
+    # Filter by mask (auto-generate if not provided)
+    data_path = args.get('data_path', '.')
+    mask_path = get_or_generate_mask_path(args, region_idx=0, data_path=data_path)
+    
+    if mask_path and exists(mask_path):
+        logger.info(f"Filtering components by mask: {mask_path}")
+        new_pred_gdf = filter_by_mask_vector(new_pred_gdf, mask_path)
     
     # Join all labels with new predictions
     logger.info("Joining old and new components")
@@ -940,22 +943,69 @@ def _get_arg(args, key: str, default=None):
     return default
 
 
-def select_good_samples_vector(
-    old_labels_gdf: gpd.GeoDataFrame,
-    new_pred_gdf: gpd.GeoDataFrame,
-    args,
-) -> gpd.GeoDataFrame:
+def compute_reference_stats(labels_gdf: gpd.GeoDataFrame) -> pd.DataFrame:
     """
-    Select high-quality samples based on geometric properties (vector-based).
+    Compute reference statistics (median area and solidity) by tree_type.
+    
+    This function can be used to compute global reference statistics from
+    labels across multiple regions.
     
     Parameters
     ----------
-    old_labels_gdf : gpd.GeoDataFrame
-        Previous labels for reference statistics
+    labels_gdf : gpd.GeoDataFrame
+        Labels GeoDataFrame with 'tree_type' column
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame indexed by tree_type with columns 'ref_area' and 'ref_solidity'
+    """
+    if labels_gdf.empty or 'tree_type' not in labels_gdf.columns:
+        return pd.DataFrame(columns=['ref_area', 'ref_solidity'])
+    
+    labels_gdf = labels_gdf.copy()
+    
+    # Ensure area is computed
+    if 'area' not in labels_gdf.columns:
+        labels_gdf['area'] = labels_gdf.geometry.area
+    
+    # Ensure solidity is computed
+    if 'solidity' not in labels_gdf.columns:
+        labels_gdf['convex_area'] = labels_gdf.geometry.convex_hull.area
+        labels_gdf['solidity'] = labels_gdf['area'] / labels_gdf['convex_area'].replace(0, np.nan)
+        labels_gdf['solidity'] = labels_gdf['solidity'].fillna(1.0)
+    
+    ref_stats = labels_gdf.groupby('tree_type').agg({
+        'area': 'median',
+        'solidity': 'median',
+    }).rename(columns={'area': 'ref_area', 'solidity': 'ref_solidity'})
+    
+    return ref_stats
+
+
+def filter_by_reference_stats(
+    new_pred_gdf: gpd.GeoDataFrame,
+    ref_stats: pd.DataFrame,
+    args,
+) -> gpd.GeoDataFrame:
+    """
+    Filter predictions based on reference statistics.
+    
+    Filters samples by comparing their area and solidity to the reference
+    statistics (median values) for each tree_type.
+    
+    Parameters
+    ----------
     new_pred_gdf : gpd.GeoDataFrame
         New predictions to filter
+    ref_stats : pd.DataFrame
+        Reference statistics DataFrame with 'ref_area' and 'ref_solidity' columns,
+        indexed by tree_type. Can be computed using compute_reference_stats().
     args : dict or object
-        Configuration arguments (supports both dict and object with attributes)
+        Configuration arguments with thresholds:
+        - upper_limit_area_rlted_to_tree_type (default: 2.0)
+        - lower_limit_area_rlted_to_tree_type (default: -0.5)
+        - lower_limit_solidity_rlted_to_tree_type (default: -0.2)
     
     Returns
     -------
@@ -965,25 +1015,8 @@ def select_good_samples_vector(
     if new_pred_gdf.empty:
         return new_pred_gdf.copy()
     
-    # Compute reference statistics by tree_type
-    if 'tree_type' not in old_labels_gdf.columns:
+    if ref_stats.empty:
         return new_pred_gdf.copy()
-    
-    # Ensure area is computed
-    if 'area' not in old_labels_gdf.columns:
-        old_labels_gdf = old_labels_gdf.copy()
-        old_labels_gdf['area'] = old_labels_gdf.geometry.area
-    
-    if 'solidity' not in old_labels_gdf.columns:
-        old_labels_gdf = old_labels_gdf.copy()
-        old_labels_gdf['convex_area'] = old_labels_gdf.geometry.convex_hull.area
-        old_labels_gdf['solidity'] = old_labels_gdf['area'] / old_labels_gdf['convex_area'].replace(0, np.nan)
-        old_labels_gdf['solidity'] = old_labels_gdf['solidity'].fillna(1.0)
-    
-    ref_stats = old_labels_gdf.groupby('tree_type').agg({
-        'area': 'median',
-        'solidity': 'median',
-    }).rename(columns={'area': 'ref_area', 'solidity': 'ref_solidity'})
     
     # Ensure new predictions have required columns
     new_pred_gdf = new_pred_gdf.copy()
@@ -1017,6 +1050,44 @@ def select_good_samples_vector(
     mask = mask.fillna(False)
     
     return new_pred_gdf[mask].copy()
+
+
+def select_good_samples_vector(
+    old_labels_gdf: gpd.GeoDataFrame,
+    new_pred_gdf: gpd.GeoDataFrame,
+    args,
+    ref_stats: pd.DataFrame = None,
+) -> gpd.GeoDataFrame:
+    """
+    Select high-quality samples based on geometric properties (vector-based).
+    
+    Parameters
+    ----------
+    old_labels_gdf : gpd.GeoDataFrame
+        Previous labels for reference statistics (used if ref_stats is None)
+    new_pred_gdf : gpd.GeoDataFrame
+        New predictions to filter
+    args : dict or object
+        Configuration arguments (supports both dict and object with attributes)
+    ref_stats : pd.DataFrame, optional
+        Pre-computed reference statistics. If provided, old_labels_gdf is not used
+        to compute statistics. This allows using global statistics from multiple regions.
+    
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Filtered predictions
+    """
+    if new_pred_gdf.empty:
+        return new_pred_gdf.copy()
+    
+    # Compute reference statistics if not provided
+    if ref_stats is None:
+        if 'tree_type' not in old_labels_gdf.columns:
+            return new_pred_gdf.copy()
+        ref_stats = compute_reference_stats(old_labels_gdf)
+    
+    return filter_by_reference_stats(new_pred_gdf, ref_stats, args)
 
 
 if __name__ == "__main__":
