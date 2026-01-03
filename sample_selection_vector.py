@@ -26,6 +26,11 @@ import pandas as pd
 from shapely.ops import unary_union
 from tqdm import tqdm
 
+# Add parent directory to path for imports
+ROOT_PATH = dirname(dirname(__file__)) if dirname(__file__) else '.'
+if ROOT_PATH not in sys.path:
+    sys.path.append(ROOT_PATH)
+
 
 def gaussian_filter(input_array: np.ndarray, sigma: float) -> np.ndarray:
     """
@@ -235,6 +240,7 @@ def get_new_segmentation_sample_vector(
     sigma: float = 9,
     reference_tiff: str = None,
     output_as_raster: bool = True,
+    ref_stats: pd.DataFrame = None,
 ) -> Union[Tuple[np.ndarray, np.ndarray], Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]]:
     """
     Vector-based version of get_new_segmentation_sample.
@@ -268,6 +274,10 @@ def get_new_segmentation_sample_vector(
         Reference TIFF for georeferencing
     output_as_raster : bool
         If True, convert output back to raster arrays
+    ref_stats : pd.DataFrame, optional
+        Pre-computed reference statistics (median area and solidity by tree_type).
+        If provided, these global statistics are used instead of computing them
+        from old_all_labels. This allows using statistics from multiple regions.
     
     Returns
     -------
@@ -304,9 +314,12 @@ def get_new_segmentation_sample_vector(
     
     logger.info(f"Ground truth: {len(ground_truth_gdf)}, Old selected: {len(old_selected_gdf)}, Old all: {len(old_all_gdf)}")
     
-    # Apply geometric filters
-    logger.info("Selecting samples with good geometric properties")
-    new_pred_gdf = select_good_samples_vector(old_all_gdf, new_pred_gdf, args)
+    # Apply geometric filters (using global ref_stats if provided)
+    if ref_stats is not None:
+        logger.info("Selecting samples with good geometric properties (using global reference stats)")
+    else:
+        logger.info("Selecting samples with good geometric properties")
+    new_pred_gdf = select_good_samples_vector(old_all_gdf, new_pred_gdf, args, ref_stats=ref_stats)
     
     logger.info(f"After quality filter: {len(new_pred_gdf)} components")
     
@@ -316,10 +329,13 @@ def get_new_segmentation_sample_vector(
             return args.get(key, default)
         return getattr(args, key, default)
     
-    # Filter by mask if provided
-    mask_path = _get_arg('mask_path')
+    # Filter by mask (auto-generate if not provided)
+    from src.io_operations import get_or_generate_mask_path
+    data_path = _get_arg('data_path', '.')
+    mask_path = get_or_generate_mask_path(args, region_idx=0, data_path=data_path)
+    
     if mask_path and exists(mask_path):
-        logger.info("Filtering by mask")
+        logger.info(f"Filtering by mask: {mask_path}")
         new_pred_gdf = filter_by_mask_vector(new_pred_gdf, mask_path)
         logger.info(f"After mask filter: {len(new_pred_gdf)} components")
     
