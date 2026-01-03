@@ -2,19 +2,41 @@
 ### FILE PATHS ###
 ##################
 # experiment directory
-model_dir: exp_deeplab_v4
+model_dir: exp_deeplabv3_resnet50
 checkpoint_file: checkpoint.pth.tar
 
-data_path: "13_amazon_data"
+data_path: "bioflore_data/v02"
 
-note: "Usando mais opções de overlap com [0.1, 0.5]. Aumentando o tamanho do sigma aplicado as imagens"
+note: "Multi-region pipeline com 3 BigPlots (03, 07, 11) do dataset Matemática na Indústria"
 
 # Input data for the model
-ortho_image: "amazon_input_data/orthoimage/NOV_2017_FINAL_004.tif"
-train_segmentation_path: "amazon_input_data/segmentation/train_set.tif"
-test_segmentation_path: "amazon_input_data/segmentation/test_set.tif"
-full_segmentation_path: "amazon_input_data/segmentation/full_set.tif"
-mask_path: "amazon_input_data/mask.tif"
+
+# Multi-region config: 3 BigPlots
+ortho_images:
+  - "matematica_industria_data/raw/geotiffs/Mosaic_BigPlot_03.tif"
+  - "matematica_industria_data/raw/geotiffs/Mosaic_BigPlot_07.tif"
+  - "matematica_industria_data/raw/geotiffs/Mosaic_BigPlot_11.tif"
+
+train_segmentation_paths:
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_03.tif"
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_07.tif"
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_11.tif"
+
+test_segmentation_paths:
+  - "bioflore_data/input_data/segmentations/test/Mosaic_BigPlot_03.tif"
+  - "bioflore_data/input_data/segmentations/test/Mosaic_BigPlot_07.tif"
+  - "bioflore_data/input_data/segmentations/test/Mosaic_BigPlot_11.tif"
+
+# Full segmentation (train + test combined) - using train as fallback if not available
+full_segmentation_paths:
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_03.tif"
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_07.tif"
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_11.tif"
+
+# mask_paths: (optional, uncomment if you have mask files)
+#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_03.tif"
+#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_07.tif"
+#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_11.tif"
 
 # You can use the 'test', 'train' or 'full' set as validation set
 validation_set: "train"
@@ -23,7 +45,7 @@ validation_set: "train"
 ###### TRAINING parameters ######
 downsampling_factor: None
 # num samples per epoch
-samples: 2500
+samples: 5000
 # True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
@@ -31,7 +53,7 @@ copy_and_paste_augmentation: False
 arch: deeplabv3_resnet50
 # True for load pretrained weights from Imagenet
 is_pretrained: True
-batch_norm: False
+batch_norm: true
 # Dropout rate for deepvlab clasisfication traning
 dropout_rate: 0.5
 
@@ -42,7 +64,9 @@ lambda_weight: 1
 # number of total epochs to run
 epochs: 30
 # batch size per gpu, i.e. how many unique instances per gpu
-batch_size: 16
+# GPU 16GB: batch_size 16-32 for input_dimension 256
+# GPU 16GB: batch_size 4-8 for input_dimension 512
+batch_size: 32
 
 # base learning rate
 base_lr: 0.01
@@ -59,7 +83,9 @@ weight_decay: 1e-06
 
 ### others parameters ###
 # number of data loading workers
-workers: 24
+# NOTE: Reduced from 16 to 4 to prevent OOM (Out of Memory) errors
+# Each worker loads data independently, consuming significant RAM with large geotiffs
+workers: 4
 # random seed
 seed: 3115
 
@@ -68,12 +94,30 @@ seed: 3115
 #### Evaluation parameters ####
 ###############################
 
-# True for training 4 disjoint regions
-size_crops: 512
-# Número de classes
-nb_class: 17
+# Size of crops extracted from the image (can be large, e.g., 1024)
+size_crops: 1024
+
+# Size of the input to the model (fixed, e.g., 256)
+# The crops are resized to this dimension before being fed to the model
+# Output is then resized back to size_crops
+input_dimension: 256
+
+###############################
+#### Multi-scale crop settings ####
+###############################
+
+# During training, crop size is sampled uniformly between min and max
+# Set min_crop_size = max_crop_size to disable multi-scale
+min_crop_size: 512      # Minimum crop size (pixels)
+max_crop_size: 2048     # Maximum crop size (pixels)
+
+# Fixed crop size for evaluation/validation
+eval_crop_size: 1024
+
+# Classes 1 - 4
+nb_class: 4
 # samples per epoch
-overlap: [0.1, 0.5]
+overlap: [0.3, 0.5]
 
 
 ################################
@@ -82,12 +126,16 @@ overlap: [0.1, 0.5]
 
 # probability and distance map thershold to filter new components
 prob_thr: 0.7
-depth_thr: 0.1
-# Num of iter
-num_iter : 22
+depth_thr: 0.5
+# 0.7+0.5 = 1.2 filter
 
-lower_limit_area: 25_000
-upper_limit_area: "inf"
+# Num of iter
+num_iter : 20
+
+# Area filter thresholds in square meters (m²)
+# The pipeline automatically handles CRS conversion (works with UTM, WGS84, etc.)
+lower_limit_area: 10  # minimum area in m² (e.g., 40 m² ≈ 6.3m x 6.3m)
+upper_limit_area: "inf"  # maximum area in m² (use "inf" for no upper limit)
 
 lower_limit_area_rlted_to_tree_type: -0.3
 upper_limit_area_rlted_to_tree_type: 0.7
