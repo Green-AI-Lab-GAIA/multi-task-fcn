@@ -216,6 +216,152 @@ def evaluate_component_metrics(ground_truth_labels:np.ndarray, predicted_labels:
     return metrics
 
 
+def evaluate_f1_by_component(
+    pred: Union[np.ndarray, torch.Tensor],
+    gt: Union[np.ndarray, torch.Tensor],
+    num_class: int = None,
+    average: Literal[None, "micro", "macro", "weighted"] = "macro"
+) -> dict:
+    """
+    Calculate F1-score based on components (not pixels).
+    
+    For each annotated component in the ground truth, the predicted class
+    is determined by the most common (majority vote) class within that component.
+    
+    Parameters
+    ----------
+    pred : Union[np.ndarray, torch.Tensor]
+        Predicted segmentation map with shape [rows, cols].
+        Values should be class indices (0 = background, 1+ = classes).
+    gt : Union[np.ndarray, torch.Tensor]
+        Ground truth segmentation map with shape [rows, cols].
+        Each unique non-zero value represents a different class.
+    num_class : int, optional
+        Number of classes (excluding background). If None, inferred from gt.
+    average : Literal[None, "micro", "macro", "weighted"], optional
+        Averaging method for F1-score. Default is "macro".
+    
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - avgF1_component: Average F1-score by component (float)
+        - F1_component: F1-score per class (list, if average=None)
+        - avgPrec_component: Average Precision by component (float)
+        - avgRec_component: Average Recall by component (float)
+        - Accuracy_component: Accuracy by component (float)
+        - n_components: Number of components evaluated (int)
+    """
+    # Convert to numpy if needed
+    if type(pred).__module__ != np.__name__:
+        pred = pred.data.cpu().numpy()
+    if type(gt).__module__ != np.__name__:
+        gt = gt.data.cpu().numpy()
+    
+    # Ensure pred is class labels (shift if needed based on model output)
+    # Model outputs are 0-indexed (0..num_class-1) while gt uses 1-indexed classes
+    pred = pred.copy()
+    if num_class is None:
+        # infer classes from gt ignoring background
+        num_class = int(gt.max())
+    # Shift only when predictions look 0-indexed and gt has background
+    if (gt.min() == 0) and (pred.min() == 0) and (pred.max() <= num_class - 1):
+        pred = pred + 1
+    
+    # Get connected components from ground truth
+    gt_components = label(gt > 0)
+    unique_components = np.unique(gt_components)
+    unique_components = unique_components[unique_components > 0]  # Remove background
+    
+    # Define labels for metrics calculation
+    if num_class is not None:
+        labels = list(range(1, num_class + 1))
+    else:
+        labels = np.unique(gt[gt > 0]).tolist()
+    
+    if len(unique_components) == 0:
+        return {
+            "avgF1_component": 0.0,
+            "F1_component": [0.0] * len(labels),
+            "avgPrec_component": 0.0,
+            "avgRec_component": 0.0,
+            "Accuracy_component": 0.0,
+            "n_components": 0
+        }
+    
+    # For each component, get true class and predicted class (majority vote)
+    gt_labels_per_component = []
+    pred_labels_per_component = []
+    
+    for comp_id in unique_components:
+        comp_mask = gt_components == comp_id
+        
+        # True class: the class value in ground truth for this component
+        # All pixels in a component should have the same gt class
+        gt_class = gt[comp_mask].max()
+        
+        # Predicted class: most common non-zero class in prediction within this component
+        pred_in_comp = pred[comp_mask]
+        pred_nonzero = pred_in_comp[pred_in_comp > 0]
+        
+        if len(pred_nonzero) == 0:
+            # No prediction in this component - assign 0 (will be counted as error)
+            pred_class = 0
+        else:
+            values, counts = np.unique(pred_nonzero, return_counts=True)
+            pred_class = values[np.argmax(counts)]
+        
+        gt_labels_per_component.append(gt_class)
+        pred_labels_per_component.append(pred_class)
+    
+    gt_labels_per_component = np.array(gt_labels_per_component)
+    pred_labels_per_component = np.array(pred_labels_per_component)
+    
+    # Compute metrics
+    metrics = dict()
+    
+    metrics["n_components"] = len(unique_components)
+    
+    metrics["Accuracy_component"] = float(accuracy_score(
+        gt_labels_per_component, 
+        pred_labels_per_component
+    )) * 100
+    
+    metrics["avgF1_component"] = float(f1_score(
+        gt_labels_per_component,
+        pred_labels_per_component,
+        average=average,
+        zero_division=0,
+        labels=labels
+    )) * 100
+    
+    metrics["F1_component"] = (f1_score(
+        gt_labels_per_component,
+        pred_labels_per_component,
+        average=None,
+        zero_division=0,
+        labels=labels
+    ) * 100).tolist()
+    
+    metrics["avgPrec_component"] = float(precision_score(
+        gt_labels_per_component,
+        pred_labels_per_component,
+        average=average,
+        zero_division=0,
+        labels=labels
+    )) * 100
+    
+    metrics["avgRec_component"] = float(recall_score(
+        gt_labels_per_component,
+        pred_labels_per_component,
+        average=average,
+        zero_division=0,
+        labels=labels
+    )) * 100
+    
+    return metrics
+
+
 if __name__ == "__main___":
     import os
 
