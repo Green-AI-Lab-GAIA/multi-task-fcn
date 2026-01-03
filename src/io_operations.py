@@ -1,20 +1,25 @@
 import ast
+import logging
 import os
 import sys
-from os.path import dirname, join
-from typing import Iterable, Tuple
-from typing import Iterable, Tuple
+from os.path import dirname, join, exists, basename, splitext
+from typing import Iterable, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 import rasterio
 import torch
 import yaml
+from PIL import Image
+from scipy.ndimage import binary_fill_holes
+from skimage.morphology import convex_hull_image
 
 ROOT_PATH = dirname(dirname(__file__))
 sys.path.append(ROOT_PATH)
 
-from src.utils import AttrDict, fix_relative_paths, get_crop_image, get_pad_width, normalize
+from src.utils import AttrDict, fix_relative_paths, get_crop_image, get_pad_width, normalize, check_folder
+
+logger = logging.getLogger(__name__)
 
 
 class ParquetUpdater:
@@ -192,6 +197,230 @@ def get_region_paths(args: dict, region_idx: int) -> dict:
         'full_segmentation_path': args['full_segmentation_paths'][region_idx] if args.get('full_segmentation_paths') else None,
         'mask_path': args['mask_paths'][region_idx] if args.get('mask_paths') else None,
     }
+
+
+def generate_mask_from_orthoimage(
+    ortho_image_path: str,
+    output_path: str = None,
+    make_convex: bool = True,
+    fill_holes: bool = True,
+    save_preview: bool = True,
+    preview_max_size: int = 1024,
+) -> np.ndarray:
+    """
+    Generate a mask from an orthoimage by identifying non-empty pixels.
+    
+    A pixel is considered empty if ALL channels are zero.
+    The mask indicates valid regions (1 = valid, 0 = background/empty).
+    
+    Parameters
+    ----------
+    ortho_image_path : str
+        Path to the orthoimage TIFF file
+    output_path : str, optional
+        Path to save the generated mask TIFF. If None, mask is not saved.
+    make_convex : bool, optional
+        If True, creates a convex hull of the valid region. Default True.
+    fill_holes : bool, optional
+        If True, fills holes in the mask. Default True.
+    save_preview : bool, optional
+        If True, saves a low-resolution PNG preview alongside the TIFF. Default True.
+    preview_max_size : int, optional
+        Maximum dimension (width or height) for the preview image. Default 1024.
+        
+    Returns
+    -------
+    np.ndarray
+        Binary mask where 1 = valid region, 0 = background (uint8)
+    """
+    logger.info(f"Generating mask from orthoimage: {ortho_image_path}")
+    
+    # Read the orthoimage
+    ortho = read_tiff(ortho_image_path)
+    
+    # Handle different shapes: (bands, height, width) or (height, width)
+    if ortho.ndim == 3:
+        # Multiband image: pixel is non-empty if ANY channel is non-zero
+        mask = np.any(ortho != 0, axis=0)
+        logger.info(f"Multiband image with shape {ortho.shape}")
+    else:
+        # Single band image
+        mask = ortho != 0
+        logger.info(f"Single band image with shape {ortho.shape}")
+    
+    # Count initial valid pixels
+    initial_valid = np.sum(mask)
+    total_pixels = mask.size
+    logger.info(f"Initial valid pixels: {initial_valid:,} / {total_pixels:,} ({100*initial_valid/total_pixels:.2f}%)")
+    
+    # Fill holes in the mask
+    if fill_holes:
+        mask = binary_fill_holes(mask)
+        logger.info(f"After fill_holes: {np.sum(mask):,} valid pixels")
+    
+    # Make the mask convex
+    if make_convex:
+        mask = convex_hull_image(mask)
+        logger.info(f"After convex_hull: {np.sum(mask):,} valid pixels")
+    
+    # Convert to uint8 (0 and 1)
+    mask = mask.astype(np.uint8)
+    
+    # Save if output path provided
+    if output_path:
+        # Get metadata from orthoimage
+        metadata = get_image_metadata(ortho_image_path)
+        
+        # Ensure output directory exists
+        output_dir = dirname(output_path)
+        if output_dir:
+            check_folder(output_dir)
+        
+        # Save TIFF
+        array2raster(output_path, mask, metadata, dtype='uint8')
+        logger.info(f"Mask TIFF saved to: {output_path}")
+        
+        # Save preview PNG
+        if save_preview:
+            _save_mask_preview(mask, output_path, preview_max_size)
+    
+    return mask
+
+
+def _save_mask_preview(
+    mask: np.ndarray, 
+    tiff_path: str, 
+    max_size: int = 1024
+) -> str:
+    """
+    Save a low-resolution PNG preview of a mask.
+    
+    Parameters
+    ----------
+    mask : np.ndarray
+        Binary mask array (0 and 1 values)
+    tiff_path : str
+        Path to the TIFF file (used to derive PNG path)
+    max_size : int
+        Maximum dimension for the preview
+        
+    Returns
+    -------
+    str
+        Path to the saved PNG file
+    """
+    # Derive PNG path from TIFF path
+    png_path = splitext(tiff_path)[0] + "_preview.png"
+    
+    # Convert mask to 0-255 range for visualization
+    mask_vis = (mask * 255).astype(np.uint8)
+    
+    # Create PIL image
+    img = Image.fromarray(mask_vis, mode='L')
+    
+    # Calculate resize dimensions maintaining aspect ratio
+    width, height = img.size
+    if width > height:
+        if width > max_size:
+            new_width = max_size
+            new_height = int(height * max_size / width)
+        else:
+            new_width, new_height = width, height
+    else:
+        if height > max_size:
+            new_height = max_size
+            new_width = int(width * max_size / height)
+        else:
+            new_width, new_height = width, height
+    
+    # Resize if needed
+    if (new_width, new_height) != (width, height):
+        img = img.resize((new_width, new_height), Image.Resampling.NEAREST)
+    
+    # Save PNG
+    img.save(png_path, optimize=True)
+    logger.info(f"Mask preview PNG saved to: {png_path} (size: {new_width}x{new_height})")
+    
+    return png_path
+
+
+def get_or_generate_mask_path(
+    args: dict, 
+    region_idx: int, 
+    data_path: str = None,
+    make_convex: bool = True,
+    fill_holes: bool = True,
+) -> Optional[str]:
+    """
+    Get mask path for a region, generating it automatically if not provided.
+    
+    If a mask path is provided in args and the file exists, returns that path.
+    Otherwise, generates a mask automatically from the orthoimage.
+    
+    Parameters
+    ----------
+    args : dict
+        Arguments dictionary (should be normalized with normalize_multi_region_args)
+    region_idx : int
+        Index of the region (0-based)
+    data_path : str, optional
+        Base data path for saving generated masks. If None, uses args['data_path']
+    make_convex : bool, optional
+        If True, creates a convex hull of the valid region. Default True.
+    fill_holes : bool, optional
+        If True, fills holes in the mask. Default True.
+        
+    Returns
+    -------
+    str or None
+        Path to the mask file, or None if generation fails
+    """
+    # Check if mask path is provided and exists
+    if args.get('mask_paths') and len(args['mask_paths']) > region_idx:
+        mask_path = args['mask_paths'][region_idx]
+        if mask_path and exists(mask_path):
+            logger.info(f"Using provided mask for region {region_idx}: {mask_path}")
+            return mask_path
+    
+    # Need to generate mask - get orthoimage path
+    if not args.get('ortho_images') or len(args['ortho_images']) <= region_idx:
+        logger.warning(f"Cannot generate mask: no orthoimage path for region {region_idx}")
+        return None
+    
+    ortho_path = args['ortho_images'][region_idx]
+    if not exists(ortho_path):
+        logger.warning(f"Cannot generate mask: orthoimage not found: {ortho_path}")
+        return None
+    
+    # Determine output folder for generated masks
+    if data_path is None:
+        data_path = args.get('data_path', '.')
+    
+    masks_folder = join(data_path, "generated_masks")
+    check_folder(masks_folder)
+    
+    # Generate mask filename based on orthoimage name
+    ortho_name = splitext(basename(ortho_path))[0]
+    generated_mask_path = join(masks_folder, f"{ortho_name}_mask.tif")
+    
+    # Generate mask if it doesn't exist
+    if not exists(generated_mask_path):
+        logger.info(f"Generating mask for region {region_idx} from orthoimage...")
+        try:
+            generate_mask_from_orthoimage(
+                ortho_path, 
+                output_path=generated_mask_path,
+                make_convex=make_convex,
+                fill_holes=fill_holes,
+                save_preview=True,
+            )
+        except Exception as e:
+            logger.error(f"Failed to generate mask for region {region_idx}: {e}")
+            return None
+    else:
+        logger.info(f"Using existing generated mask for region {region_idx}: {generated_mask_path}")
+    
+    return generated_mask_path
 
 
 
