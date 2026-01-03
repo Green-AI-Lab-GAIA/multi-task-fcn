@@ -23,6 +23,9 @@ class DatasetFromCoord(Dataset):
     Supports automatic resizing: crops are extracted at `crop_size` and 
     optionally resized to `input_dimension` for the model.
     
+    Supports multi-scale cropping: if min_crop_size and max_crop_size are provided,
+    the crop size is sampled uniformly between them for each sample.
+    
     Parameters
     ----------
     image_path : str
@@ -32,7 +35,7 @@ class DatasetFromCoord(Dataset):
     distance_map_path : str
         Path to the distance map
     crop_size : int
-        Size of crops to extract from the image
+        Size of crops to extract from the image (used when multi-scale is disabled)
     input_dimension : int, optional
         Size to resize crops before feeding to model. If None, uses crop_size.
     samples : int, optional
@@ -41,6 +44,10 @@ class DatasetFromCoord(Dataset):
         Whether to apply data augmentation
     copy_paste_augmentation : bool
         Whether to use copy-paste augmentation
+    min_crop_size : int, optional
+        Minimum crop size for multi-scale cropping. If None, multi-scale is disabled.
+    max_crop_size : int, optional
+        Maximum crop size for multi-scale cropping. If None, multi-scale is disabled.
     """
     def __init__(self,
                 image_path: str,
@@ -50,7 +57,9 @@ class DatasetFromCoord(Dataset):
                 input_dimension: Optional[int] = None,
                 samples: int = None,
                 augment: bool = False,
-                copy_paste_augmentation: bool = False
+                copy_paste_augmentation: bool = False,
+                min_crop_size: Optional[int] = None,
+                max_crop_size: Optional[int] = None
                 ) -> None: 
         
         super().__init__()
@@ -65,6 +74,12 @@ class DatasetFromCoord(Dataset):
         self.augment = augment
         
         self.copy_paste_augmentation = copy_paste_augmentation
+        
+        # Multi-scale crop settings
+        self.min_crop_size = min_crop_size
+        self.max_crop_size = max_crop_size
+        self.multi_scale = (min_crop_size is not None and max_crop_size is not None 
+                           and min_crop_size != max_crop_size)
         
         self.img_segmentation = load_image(segmentation_path)
         self.img_depth = load_image(distance_map_path)
@@ -140,11 +155,14 @@ class DatasetFromCoord(Dataset):
         
         return resized
 
-    def read_window_around_coord(self, coord:np.ndarray, image:np.ndarray) -> torch.Tensor:
+    def read_window_around_coord(self, coord:np.ndarray, image:np.ndarray, crop_size: Optional[int] = None) -> torch.Tensor:
         
-        image_crop = get_crop_image(image, image.shape, coord, self.crop_size)
+        # Use provided crop_size or default to self.crop_size
+        current_crop_size = crop_size if crop_size is not None else self.crop_size
 
-        pad_width = get_pad_width(self.crop_size, coord, image.shape)
+        image_crop = get_crop_image(image, image.shape, coord, current_crop_size)
+
+        pad_width = get_pad_width(current_crop_size, coord, image.shape)
 
         # apply padding to image
         image_crop = np.pad(
@@ -155,8 +173,8 @@ class DatasetFromCoord(Dataset):
         )
         
 
-        if (image_crop.shape[-1] != self.crop_size) or (image_crop.shape[-2] != self.crop_size):
-            raise ValueError(f"There is a bug relationed to the shape {image_crop.shape}")
+        if (image_crop.shape[-1] != current_crop_size) or (image_crop.shape[-2] != current_crop_size):
+            raise ValueError(f"There is a bug relationed to the shape {image_crop.shape}, expected {current_crop_size}")
 
         return torch.tensor(image_crop)
 
@@ -191,6 +209,14 @@ class DatasetFromCoord(Dataset):
         """
         current_coord = self.coords[idx].copy()
         
+        # Determine crop size for this sample
+        if self.multi_scale:
+            current_crop_size = np.random.randint(self.min_crop_size, self.max_crop_size + 1)
+            # Ensure crop size is even (required by get_crop_image/get_pad_width functions)
+            if current_crop_size % 2 != 0:
+                current_crop_size += 1
+        else:
+            current_crop_size = self.crop_size
         
         if self.augment:
             
@@ -200,24 +226,27 @@ class DatasetFromCoord(Dataset):
             random_row_prop = np.random.uniform(*uniform_dist_range)
             random_column_prop = np.random.uniform(*uniform_dist_range)
 
-            current_coord[0] += int(random_row_prop * (self.crop_size//2))
-            current_coord[1] += int(random_column_prop * (self.crop_size//2))
+            current_coord[0] += int(random_row_prop * (current_crop_size//2))
+            current_coord[1] += int(random_column_prop * (current_crop_size//2))
 
 
         image = self.read_window_around_coord(
             coord=current_coord,
             image=self.image,
+            crop_size=current_crop_size,
         )
         
 
         segmentation = self.read_window_around_coord(
             coord=current_coord,
-            image=self.img_segmentation
+            image=self.img_segmentation,
+            crop_size=current_crop_size,
         )
 
         distance_map = self.read_window_around_coord(
             coord=current_coord,
-            image=self.img_depth
+            image=self.img_depth,
+            crop_size=current_crop_size,
         )
 
 
@@ -244,8 +273,8 @@ class DatasetFromCoord(Dataset):
             segmentation = transforms.functional.rotate(segmentation.unsqueeze(0), angle).squeeze(0)
             distance_map = transforms.functional.rotate(distance_map.unsqueeze(0), angle).squeeze(0)
 
-        # Resize to input_dimension if different from crop_size
-        if self.input_dimension != self.crop_size:
+        # Resize to input_dimension (always needed for multi-scale, or when crop_size != input_dimension)
+        if current_crop_size != self.input_dimension:
             image = self._resize_tensor(image, self.input_dimension, mode='bilinear')
             distance_map = self._resize_tensor(distance_map, self.input_dimension, mode='bilinear')
             segmentation = self._resize_tensor(segmentation, self.input_dimension, mode='nearest')
@@ -456,6 +485,9 @@ class MultiRegionDatasetFromCoord(Dataset):
     Combines data from multiple orthoimages with their corresponding segmentations
     and distance maps. Samples are balanced across regions.
     
+    Supports multi-scale cropping: if min_crop_size and max_crop_size are provided,
+    the crop size is sampled uniformly between them for each sample.
+    
     Parameters
     ----------
     image_paths : list of str
@@ -465,7 +497,7 @@ class MultiRegionDatasetFromCoord(Dataset):
     distance_map_paths : list of str
         Paths to the distance maps for each region
     crop_size : int
-        Size of crops to extract from the images
+        Size of crops to extract from the images (used when multi-scale is disabled)
     input_dimension : int, optional
         Size to resize crops before feeding to model. If None, uses crop_size.
     samples : int, optional
@@ -476,6 +508,10 @@ class MultiRegionDatasetFromCoord(Dataset):
         Whether to use copy-paste augmentation
     balance_regions : bool
         Whether to balance samples across regions (default True)
+    min_crop_size : int, optional
+        Minimum crop size for multi-scale cropping. If None, multi-scale is disabled.
+    max_crop_size : int, optional
+        Maximum crop size for multi-scale cropping. If None, multi-scale is disabled.
     """
     def __init__(self,
                 image_paths: list,
@@ -486,7 +522,9 @@ class MultiRegionDatasetFromCoord(Dataset):
                 samples: int = None,
                 augment: bool = False,
                 copy_paste_augmentation: bool = False,
-                balance_regions: bool = True
+                balance_regions: bool = True,
+                min_crop_size: Optional[int] = None,
+                max_crop_size: Optional[int] = None
                 ) -> None: 
         
         super().__init__()
@@ -505,6 +543,12 @@ class MultiRegionDatasetFromCoord(Dataset):
         self.augment = augment
         self.copy_paste_augmentation = copy_paste_augmentation
         self.balance_regions = balance_regions
+        
+        # Multi-scale crop settings
+        self.min_crop_size = min_crop_size
+        self.max_crop_size = max_crop_size
+        self.multi_scale = (min_crop_size is not None and max_crop_size is not None 
+                           and min_crop_size != max_crop_size)
         
         # Load all images into memory
         self.images = []
@@ -607,10 +651,13 @@ class MultiRegionDatasetFromCoord(Dataset):
         
         return resized
 
-    def read_window_around_coord(self, coord: np.ndarray, image: np.ndarray) -> torch.Tensor:
+    def read_window_around_coord(self, coord: np.ndarray, image: np.ndarray, crop_size: Optional[int] = None) -> torch.Tensor:
         """Read a crop window around the coordinate."""
-        image_crop = get_crop_image(image, image.shape, coord, self.crop_size)
-        pad_width = get_pad_width(self.crop_size, coord, image.shape)
+        # Use provided crop_size or default to self.crop_size
+        current_crop_size = crop_size if crop_size is not None else self.crop_size
+        
+        image_crop = get_crop_image(image, image.shape, coord, current_crop_size)
+        pad_width = get_pad_width(current_crop_size, coord, image.shape)
         
         image_crop = np.pad(
             image_crop, 
@@ -619,8 +666,8 @@ class MultiRegionDatasetFromCoord(Dataset):
             constant_values=0
         )
         
-        if (image_crop.shape[-1] != self.crop_size) or (image_crop.shape[-2] != self.crop_size):
-            raise ValueError(f"Shape mismatch: {image_crop.shape}")
+        if (image_crop.shape[-1] != current_crop_size) or (image_crop.shape[-2] != current_crop_size):
+            raise ValueError(f"Shape mismatch: {image_crop.shape}, expected {current_crop_size}")
         
         return torch.tensor(image_crop)
 
@@ -636,6 +683,15 @@ class MultiRegionDatasetFromCoord(Dataset):
         current_coord = coord_data[:2].astype(int)
         region_idx = int(coord_data[2])
         
+        # Determine crop size for this sample
+        if self.multi_scale:
+            current_crop_size = np.random.randint(self.min_crop_size, self.max_crop_size + 1)
+            # Ensure crop size is even (required by get_crop_image/get_pad_width functions)
+            if current_crop_size % 2 != 0:
+                current_crop_size += 1
+        else:
+            current_crop_size = self.crop_size
+        
         # Get the correct images for this region
         image_data = self.images[region_idx]
         seg_data = self.img_segmentations[region_idx]
@@ -645,12 +701,12 @@ class MultiRegionDatasetFromCoord(Dataset):
             uniform_dist_range = (-0.99, 0.99)
             random_row_prop = np.random.uniform(*uniform_dist_range)
             random_column_prop = np.random.uniform(*uniform_dist_range)
-            current_coord[0] += int(random_row_prop * (self.crop_size // 2))
-            current_coord[1] += int(random_column_prop * (self.crop_size // 2))
+            current_coord[0] += int(random_row_prop * (current_crop_size // 2))
+            current_coord[1] += int(random_column_prop * (current_crop_size // 2))
         
-        image = self.read_window_around_coord(coord=current_coord, image=image_data)
-        segmentation = self.read_window_around_coord(coord=current_coord, image=seg_data)
-        distance_map = self.read_window_around_coord(coord=current_coord, image=depth_data)
+        image = self.read_window_around_coord(coord=current_coord, image=image_data, crop_size=current_crop_size)
+        segmentation = self.read_window_around_coord(coord=current_coord, image=seg_data, crop_size=current_crop_size)
+        distance_map = self.read_window_around_coord(coord=current_coord, image=depth_data, crop_size=current_crop_size)
         
         if self.augment:
             # Horizontal Flip
@@ -671,8 +727,8 @@ class MultiRegionDatasetFromCoord(Dataset):
             segmentation = transforms.functional.rotate(segmentation.unsqueeze(0), angle).squeeze(0)
             distance_map = transforms.functional.rotate(distance_map.unsqueeze(0), angle).squeeze(0)
         
-        # Resize to input_dimension if different from crop_size
-        if self.input_dimension != self.crop_size:
+        # Resize to input_dimension (always needed for multi-scale, or when crop_size != input_dimension)
+        if current_crop_size != self.input_dimension:
             image = self._resize_tensor(image, self.input_dimension, mode='bilinear')
             distance_map = self._resize_tensor(distance_map, self.input_dimension, mode='bilinear')
             segmentation = self._resize_tensor(segmentation, self.input_dimension, mode='nearest')
