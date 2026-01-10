@@ -133,7 +133,7 @@ class ASPPModule(nn.Module):
 
 
 class DeepLabv3Plus_resnet9(nn.Module):
-    def __init__(self, num_ch, psize, num_class):
+    def __init__(self, num_ch, psize, num_class, dropout_rate=0.65):
         super(DeepLabv3Plus_resnet9, self).__init__()
         
         if psize != 128:
@@ -142,6 +142,7 @@ class DeepLabv3Plus_resnet9(nn.Module):
         self.num_ch = num_ch
         self.psize = psize
         self.nb_class = num_class
+        self.dropout_rate = dropout_rate
 
         self.conv1 = conv_padding_same(in_channels = self.num_ch,
                                        out_channels = 64,
@@ -207,7 +208,7 @@ class DeepLabv3Plus_resnet9(nn.Module):
                                      mode = "bilinear",
                                      align_corners=True,
                                      )
-        self.dropout = nn.Dropout(p=0.65)
+        self.dropout = nn.Dropout(p=self.dropout_rate)
 
         
         self.conv_class = conv_padding_same(in_channels=128,

@@ -22,7 +22,7 @@ from src.metrics import evaluate_f1, evaluate_metrics
 from src.utils import (AverageMeter, check_folder, get_device, plot_figures)
 from src.io_operations import load_norm, read_yaml
 import wandb
-args = read_yaml(join(ROOT_PATH, "args.yaml"))
+args = None # Removed hardcoded loading of args.yaml
 
 logger = getLogger("__main__")
 
@@ -57,6 +57,14 @@ def build_model(in_channels:list,
             resnet_arch = "resnet101"
         )
 
+    elif arch == "deeplabv3+_resnet9":
+        model = DeepLabv3Plus_resnet9(
+            num_ch = in_channels,
+            num_class = num_classes,
+            psize = psize,
+            dropout_rate = dropout_rate
+        )
+
     elif arch.startswith("deeplabv3+"):
         # get resnet_depth
         resnet_depth = int(arch.split("resnet")[-1])
@@ -64,14 +72,6 @@ def build_model(in_channels:list,
             model_depth = resnet_depth,
             nb_class = num_classes,
             num_ch_1 = in_channels,
-            psize = psize
-        )
-
-
-    elif arch == "deeplabv3+_resnet9":
-        model = DeepLabv3Plus_resnet9(
-            num_ch = in_channels,
-            num_class = num_classes,
             psize = psize
         )
     
@@ -309,6 +309,7 @@ def train(train_loader:torch.utils.data.DataLoader,
 
 def eval(val_loader:torch.utils.data.DataLoader, 
           model:nn.Module, 
+          nb_class:int
         ) -> Tuple[float, float]:
     """Function to evaluate model based on f1 score
 
@@ -318,6 +319,8 @@ def eval(val_loader:torch.utils.data.DataLoader,
         Dataloader with validation set
     model : nn.Module
         Model to evaluate
+    nb_class : int
+        Number of classes
 
     Returns
     -------
@@ -330,8 +333,8 @@ def eval(val_loader:torch.utils.data.DataLoader,
 
     DEVICE = get_device()
 
-    f1_avg = MulticlassF1Score(num_classes=args.nb_class, average="macro", device=DEVICE)
-    f1_by_class_avg = MulticlassF1Score(num_classes=args.nb_class, average=None, device=DEVICE)
+    f1_avg = MulticlassF1Score(num_classes=nb_class, average="macro", device=DEVICE)
+    f1_by_class_avg = MulticlassF1Score(num_classes=nb_class, average=None, device=DEVICE)
     
     soft = nn.Softmax(dim=1).to(DEVICE)
 

@@ -225,18 +225,20 @@ def evaluate_overlap(prediction_path: str,
 
     logger.info("Building data done with {} patches loaded.".format(test_dataset.coords.shape[0]))
     
-    model = DeepLabv3(
+    # Build model using the architecture specified in args
+    model = build_model(
         in_channels=ortho_image_shape[0],
-        num_classes=args.nb_class, 
-        pretrained=args.is_pretrained, 
+        num_classes=args.nb_class,
+        arch=args.arch,
         dropout_rate=args.dropout_rate,
         batch_norm=args.batch_norm,
-        downsampling_factor=args.downsampling_factor,
+        pretrained=args.is_pretrained,
+        psize=input_dimension,
     )
 
     last_checkpoint = join(current_model_folder, args.checkpoint_file)
     model = load_weights(model, last_checkpoint)
-    logger.info("Model loaded from {}".format(last_checkpoint))
+    logger.info(f"Model ({args.arch}) loaded from {last_checkpoint}")
 
     # Load model to GPU
     model = model.to(DEVICE)
