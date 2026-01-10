@@ -147,13 +147,15 @@ def predict_network(ortho_image_shape: Tuple,
             if debug_mode and i > 2:
                 break
                 
-        # avoid zero division
+        # Avoid zero division (and keep memory low).
+        # NOTE: Do NOT use boolean masking here (pred_prob[mask] ...) because that
+        # allocates large temporary arrays and can OOM on big rasters.
         count_image[count_image == 0] = 1
-        mask_division = count_image > 1
-        
+
         logger.info("Dividing prob_map and depth_map by the number of times the pixel was predicted")
-        pred_prob[mask_division] = pred_prob[mask_division] / count_image[mask_division][:, None]
-        pred_depth[mask_division] = pred_depth[mask_division] / count_image[mask_division]
+        # In-place division with broadcasting: no large temporaries.
+        pred_prob /= count_image[..., None]
+        pred_depth /= count_image
         
         del count_image
         return pred_prob, np.argmax(pred_prob, axis=-1).astype("uint8"), pred_depth
