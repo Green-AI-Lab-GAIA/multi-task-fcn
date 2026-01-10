@@ -22,7 +22,7 @@ from src.io_operations import (fix_relative_paths, get_image_metadata,
                                load_args, read_tiff, read_yaml)
 from src.utils import convert_to_minor_numeric_type
 
-args = load_args(join(dirname(__file__), "args.yaml"))
+args = None # Removed hardcoded loading of args.yaml
 
 logger = getLogger("__main__")
 
