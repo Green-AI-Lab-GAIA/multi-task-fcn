@@ -14,7 +14,6 @@ import torch.nn.parallel
 import torch.optim
 from tqdm import tqdm
 
-from src.deepvlab3 import DeepLabv3
 from src.logger import create_logger
 from src.model import build_model, load_weights
 from src.dataset import DatasetFromCoord, DatasetForInference
