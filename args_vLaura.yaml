@@ -1,0 +1,149 @@
+##################
+### FILE PATHS ###
+##################
+# experiment directory
+model_dir: exp_deeplabv3+_resnet9
+checkpoint_file: checkpoint.pth.tar
+
+data_path: "bioflore_data/vLaura"
+
+note: "Experimento vLaura - DeepLabv3+_resnet9 com dropout 0.65 - 1 iteração apenas"
+
+# Input data for the model
+
+# Multi-region config: 3 BigPlots
+ortho_images:
+  - "matematica_industria_data/raw/geotiffs/Mosaic_BigPlot_03.tif"
+  - "matematica_industria_data/raw/geotiffs/Mosaic_BigPlot_07.tif"
+  - "matematica_industria_data/raw/geotiffs/Mosaic_BigPlot_11.tif"
+
+train_segmentation_paths:
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_03.tif"
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_07.tif"
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_11.tif"
+
+test_segmentation_paths:
+  - "bioflore_data/input_data/segmentations/test/Mosaic_BigPlot_03.tif"
+  - "bioflore_data/input_data/segmentations/test/Mosaic_BigPlot_07.tif"
+  - "bioflore_data/input_data/segmentations/test/Mosaic_BigPlot_11.tif"
+
+# Full segmentation (train + test combined) - using train as fallback if not available
+full_segmentation_paths:
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_03.tif"
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_07.tif"
+  - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_11.tif"
+
+# mask_paths: (optional, uncomment if you have mask files)
+#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_03.tif"
+#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_07.tif"
+#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_11.tif"
+
+# You can use the 'test', 'train' or 'full' set as validation set
+validation_set: "train"
+
+################################# 
+###### TRAINING parameters ######
+downsampling_factor: None
+# num samples per epoch
+samples: 5000
+# True for data augmentation during training
+augment: True
+copy_and_paste_augmentation: False
+# convnet architecture --> IMPORTANTE: usando deeplabv3+_resnet9
+arch: deeplabv3+_resnet9
+# True for load pretrained weights from Imagenet (não aplicável para resnet9)
+is_pretrained: False
+batch_norm: true
+# Dropout rate for deepvlab classification training
+dropout_rate: 0.65
+
+# regularization weight of distance map
+lambda_weight: 1
+
+### optim parameters ###
+# number of total epochs to run
+epochs: 50
+# batch size per gpu, i.e. how many unique instances per gpu
+# GPU 16GB: batch_size 16-32 for input_dimension 256
+# GPU 16GB: batch_size 4-8 for input_dimension 512
+# NOTA: Com input_dimension 128, pode aumentar o batch_size
+batch_size: 128
+
+# base learning rate
+base_lr: 0.01
+# final learning rate
+final_lr: 0.0001
+# number of warmup epochs
+warmup_epochs: 5
+# initial warmup learning rate
+start_warmup: 0.0
+
+# weight decay
+weight_decay: 1e-06
+
+
+### others parameters ###
+# number of data loading workers
+# NOTE: Reduced from 16 to 4 to prevent OOM (Out of Memory) errors
+# Each worker loads data independently, consuming significant RAM with large geotiffs
+workers: 4
+# random seed
+seed: 3115
+
+
+###############################
+#### Evaluation parameters ####
+###############################
+
+# Size of crops extracted from the image (can be large, e.g., 1024)
+size_crops: 1024
+
+# Size of the input to the model (fixed, e.g., 128)
+# IMPORTANTE: DeepLabv3Plus_resnet9 REQUER input_dimension = 128
+# O modelo tem essa restrição hardcoded no código
+input_dimension: 128
+
+###############################
+#### Multi-scale crop settings ####
+###############################
+
+# During training, crop size is sampled uniformly between min and max
+# Set min_crop_size = max_crop_size to disable multi-scale
+min_crop_size: 512      # Minimum crop size (pixels)
+max_crop_size: 2048     # Maximum crop size (pixels)
+
+# Fixed crop size for evaluation/validation
+eval_crop_size: 1024
+
+# Classes 1 - 4
+nb_class: 4
+# samples per epoch
+overlap: [0.3, 0.5]
+
+
+################################
+## Active Learning parameters ##
+################################
+
+# probability and distance map threshold to filter new components
+prob_thr: 0.7
+depth_thr: 0.5
+# 0.7+0.5 = 1.2 filter
+
+# Num of iter - CONFIGURADO PARA 1 ITERAÇÃO APENAS
+num_iter: 1
+
+# Area filter thresholds in square meters (m²)
+# The pipeline automatically handles CRS conversion (works with UTM, WGS84, etc.)
+lower_limit_area: 10  # minimum area in m² (e.g., 40 m² ≈ 6.3m x 6.3m)
+upper_limit_area: "inf"  # maximum area in m² (use "inf" for no upper limit)
+
+lower_limit_area_rlted_to_tree_type: -0.3
+upper_limit_area_rlted_to_tree_type: 0.7
+lower_limit_solidity_rlted_to_tree_type: -0.5
+
+# Available scales: "log", None
+scale_area: None
+
+# Sigma value for gaussian filter in distance map
+sigma: 30
