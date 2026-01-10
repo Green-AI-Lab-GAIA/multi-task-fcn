@@ -13,7 +13,7 @@ sys.path.append(ROOT_PATH)
 
 from src.io_operations import read_yaml
 
-args = read_yaml(join(ROOT_PATH, "args.yaml"))
+args = None # Removed hardcoded loading of args.yaml
 
 
 def evaluate_metrics(pred:Union[np.ndarray, torch.Tensor], gt:Union[np.ndarray, torch.Tensor], num_class:int = args.nb_class) -> dict:
@@ -360,6 +360,229 @@ def evaluate_f1_by_component(
     )) * 100
     
     return metrics
+
+
+def evaluate_miou_per_polygon(
+    pred: Union[np.ndarray, torch.Tensor],
+    gt: Union[np.ndarray, torch.Tensor],
+    num_class: int = None,
+) -> dict:
+    """
+    Calculate Mean IoU per polygon (instance-level, class-aware, masked).
+    
+    For each connected component ("polygon") in the ground truth for a given
+    class, find the predicted component of the SAME class with the highest
+    pixel intersection. Then compute IoU between that GT polygon and the matched
+    prediction polygon, but ONLY over pixels where the ground truth is annotated
+    (gt > 0). This avoids penalizing predictions in unknown/unannotated areas
+    (where gt == 0 means "unknown").
+    
+    Parameters
+    ----------
+    pred : Union[np.ndarray, torch.Tensor]
+        Predicted segmentation map with shape [rows, cols].
+        Values should be class indices (0 = background, 1+ = classes).
+    gt : Union[np.ndarray, torch.Tensor]
+        Ground truth segmentation map with shape [rows, cols].
+        0 means "unknown / not annotated". Non-zero values are classes (1..K).
+    num_class : int, optional
+        Number of classes (excluding background). If None, inferred from gt.
+    
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - avgMIoU: Mean IoU across all polygons (float, percentage)
+        - MIoU_per_class: Mean IoU per class (list)
+        - IoU_per_polygon: IoU for each polygon (list)
+        - n_polygons_evaluated: Total number of GT polygons (int)
+        - n_polygons_matched: Number of GT polygons with at least one overlapping prediction (int)
+    """
+    # Convert to numpy if needed
+    if type(pred).__module__ != np.__name__:
+        pred = pred.data.cpu().numpy()
+    if type(gt).__module__ != np.__name__:
+        gt = gt.data.cpu().numpy()
+    
+    # Ensure pred is class labels (shift if needed based on model output)
+    pred = pred.copy()
+    if num_class is None:
+        num_class = int(gt.max())
+    
+    # Shift only when predictions look 0-indexed and gt has background
+    if (gt.min() == 0) and (pred.min() == 0) and (pred.max() <= num_class - 1):
+        pred = pred + 1
+    
+    valid_mask = gt > 0  # only annotated pixels are valid for union/intersection
+
+    # Early exit if there are no annotated polygons at all
+    if not np.any(valid_mask):
+        return {
+            "avgMIoU": 0.0,
+            "MIoU_per_class": [0.0] * num_class,
+            "IoU_per_polygon": [],
+            "n_polygons_evaluated": 0,
+            "n_polygons_matched": 0,
+        }
+    
+    # Store IoU per polygon and per class
+    iou_per_polygon = []
+    iou_per_class = {c: [] for c in range(1, num_class + 1)}
+    n_matched = 0
+
+    # Process per class to ensure class-aware polygons and matching
+    for c in range(1, num_class + 1):
+        # Connected components for this class only
+        gt_components_c = label(gt == c)
+        pred_components_c = label(pred == c)
+
+        unique_gt_components_c = np.unique(gt_components_c)
+        unique_gt_components_c = unique_gt_components_c[unique_gt_components_c > 0]
+
+        if len(unique_gt_components_c) == 0:
+            continue
+
+        for gt_comp_id in unique_gt_components_c:
+            gt_mask = gt_components_c == gt_comp_id  # subset of valid_mask by definition
+
+            # Candidate predicted components of the same class that overlap this GT polygon
+            overlapping_pred_ids = np.unique(pred_components_c[gt_mask])
+            overlapping_pred_ids = overlapping_pred_ids[overlapping_pred_ids > 0]
+
+            if len(overlapping_pred_ids) == 0:
+                iou_per_polygon.append(0.0)
+                iou_per_class[c].append(0.0)
+                continue
+
+            # Pick the predicted polygon with the largest intersection area
+            best_pred_id = None
+            best_intersection = -1
+            for pred_comp_id in overlapping_pred_ids:
+                pred_mask = pred_components_c == pred_comp_id
+                inter = int(np.sum(gt_mask & pred_mask))
+                if inter > best_intersection:
+                    best_intersection = inter
+                    best_pred_id = int(pred_comp_id)
+
+            pred_mask_best = pred_components_c == best_pred_id
+
+            # IoU computed only on annotated pixels (valid_mask)
+            intersection = float(np.sum(gt_mask & pred_mask_best))  # already within valid
+            union = float(np.sum((gt_mask | pred_mask_best) & valid_mask))
+            iou = (intersection / union) if union > 0 else 0.0
+
+            iou_per_polygon.append(iou)
+            iou_per_class[c].append(iou)
+
+            if best_intersection > 0:
+                n_matched += 1
+    
+    # Calculate mean IoU
+    avg_miou = np.mean(iou_per_polygon) * 100 if iou_per_polygon else 0.0
+    
+    # Calculate mean IoU per class
+    miou_per_class = []
+    for c in range(1, num_class + 1):
+        if iou_per_class[c]:
+            miou_per_class.append(float(np.mean(iou_per_class[c]) * 100))
+        else:
+            miou_per_class.append(0.0)
+    
+    return {
+        "avgMIoU": float(avg_miou),
+        "MIoU_per_class": miou_per_class,
+        "IoU_per_polygon": [float(x * 100) for x in iou_per_polygon],
+        "n_polygons_evaluated": len(iou_per_polygon),
+        "n_polygons_matched": n_matched,
+    }
+
+
+def get_miou_polygon_data(
+    pred: Union[np.ndarray, torch.Tensor],
+    gt: Union[np.ndarray, torch.Tensor],
+    num_class: int = None,
+) -> tuple:
+    """
+    Extract per-polygon IoU data for global aggregation.
+    
+    This function returns the raw data needed to compute global mIoU
+    across multiple regions, using the same definition as
+    `evaluate_miou_per_polygon` (class-aware matching by max intersection,
+    IoU masked to annotated pixels where gt > 0).
+    
+    Parameters
+    ----------
+    pred : Union[np.ndarray, torch.Tensor]
+        Predicted segmentation map
+    gt : Union[np.ndarray, torch.Tensor]
+        Ground truth segmentation map
+    num_class : int, optional
+        Number of classes
+    
+    Returns
+    -------
+    tuple
+        (iou_per_polygon, gt_classes_per_polygon) where:
+        - iou_per_polygon: list of IoU values for each GT polygon
+        - gt_classes_per_polygon: list of GT class for each polygon
+    """
+    # Convert to numpy if needed
+    if type(pred).__module__ != np.__name__:
+        pred = pred.data.cpu().numpy()
+    if type(gt).__module__ != np.__name__:
+        gt = gt.data.cpu().numpy()
+    
+    pred = pred.copy()
+    if num_class is None:
+        num_class = int(gt.max())
+    
+    if (gt.min() == 0) and (pred.min() == 0) and (pred.max() <= num_class - 1):
+        pred = pred + 1
+
+    valid_mask = gt > 0
+    
+    iou_per_polygon = []
+    gt_classes_per_polygon = []
+
+    if not np.any(valid_mask):
+        return iou_per_polygon, gt_classes_per_polygon
+
+    for c in range(1, num_class + 1):
+        gt_components_c = label(gt == c)
+        pred_components_c = label(pred == c)
+
+        unique_gt_components_c = np.unique(gt_components_c)
+        unique_gt_components_c = unique_gt_components_c[unique_gt_components_c > 0]
+
+        for gt_comp_id in unique_gt_components_c:
+            gt_mask = gt_components_c == gt_comp_id
+            gt_classes_per_polygon.append(int(c))
+
+            overlapping_pred_ids = np.unique(pred_components_c[gt_mask])
+            overlapping_pred_ids = overlapping_pred_ids[overlapping_pred_ids > 0]
+
+            if len(overlapping_pred_ids) == 0:
+                iou_per_polygon.append(0.0)
+                continue
+
+            best_pred_id = None
+            best_intersection = -1
+            for pred_comp_id in overlapping_pred_ids:
+                pred_mask = pred_components_c == pred_comp_id
+                inter = int(np.sum(gt_mask & pred_mask))
+                if inter > best_intersection:
+                    best_intersection = inter
+                    best_pred_id = int(pred_comp_id)
+
+            pred_mask_best = pred_components_c == best_pred_id
+
+            intersection = float(np.sum(gt_mask & pred_mask_best))
+            union = float(np.sum((gt_mask | pred_mask_best) & valid_mask))
+            iou = (intersection / union) if union > 0 else 0.0
+
+            iou_per_polygon.append(iou)
+    
+    return iou_per_polygon, gt_classes_per_polygon
 
 
 if __name__ == "__main___":

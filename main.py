@@ -39,7 +39,13 @@ from src.io_operations import (ParquetUpdater, array2raster,
                                read_tiff, save_yaml,
                                get_or_generate_mask_path)
 from src.logger import create_logger
-from src.metrics import evaluate_component_metrics, evaluate_f1_by_component, evaluate_metrics
+from src.metrics import (
+    evaluate_component_metrics, 
+    evaluate_f1_by_component, 
+    evaluate_metrics,
+    evaluate_miou_per_polygon,
+    get_miou_polygon_data,
+)
 from src.model import eval, load_weights, save_checkpoint, train, build_model
 from src.utils import (check_folder, fix_random_seeds, from_255_to_1,
                        get_device, print_sucess,
@@ -1855,6 +1861,10 @@ def compile_component_metrics(current_iter_folder: str, args: dict):
     all_gt_labels_per_component = []
     all_pred_labels_per_component = []
     
+    # Lists to accumulate data for global mIoU calculation
+    all_iou_per_polygon = []
+    all_gt_classes_per_polygon = []
+    
     for region_idx in range(num_regions):
         if num_regions > 1:
             region_folder = join(current_iter_folder, f"region_{region_idx}")
@@ -1877,6 +1887,11 @@ def compile_component_metrics(current_iter_folder: str, args: dict):
             gt_labels, pred_labels = _get_component_labels(predicted_seg, ground_truth_test, args.nb_class)
             all_gt_labels_per_component.extend(gt_labels)
             all_pred_labels_per_component.extend(pred_labels)
+            
+            # Accumulate mIoU data for global calculation
+            iou_data, gt_classes = get_miou_polygon_data(predicted_seg, ground_truth_test, args.nb_class)
+            all_iou_per_polygon.extend(iou_data)
+            all_gt_classes_per_polygon.extend(gt_classes)
         
         if exists(COMPONENTS_PRECISION_METRICS_PATH) and exists(COMPONENTS_STATS_PATH):
             logger.info(f"Region {region_idx} component metrics already exist. Skipping per-region calculation...")
@@ -1918,6 +1933,19 @@ def compile_component_metrics(current_iter_folder: str, args: dict):
             )
             all_labels_metrics.update(f1_by_component_metrics)
             logger.info(f"Region {region_idx}: F1 by component = {f1_by_component_metrics['avgF1_component']:.2f}%")
+            
+            # Evaluate mIoU per polygon
+            miou_metrics = evaluate_miou_per_polygon(
+                pred=predicted_seg,
+                gt=ground_truth_test,
+                num_class=args.nb_class
+            )
+            all_labels_metrics["avgMIoU"] = miou_metrics["avgMIoU"]
+            all_labels_metrics["MIoU_per_class"] = miou_metrics["MIoU_per_class"]
+            all_labels_metrics["n_polygons_evaluated"] = miou_metrics["n_polygons_evaluated"]
+            all_labels_metrics["n_polygons_matched"] = miou_metrics["n_polygons_matched"]
+            logger.info(f"Region {region_idx}: mIoU per polygon = {miou_metrics['avgMIoU']:.2f}%")
+            
             del predicted_seg
         
         if num_regions > 1:
@@ -1968,6 +1996,27 @@ def compile_component_metrics(current_iter_folder: str, args: dict):
                 "global/component/avgRec": float(recall_score(gt_array, pred_array, average="macro", zero_division=0, labels=labels)) * 100,
             }
             
+            # Add global mIoU metrics
+            if all_iou_per_polygon:
+                avg_miou = float(np.mean(all_iou_per_polygon) * 100)
+                n_matched = sum(1 for iou in all_iou_per_polygon if iou > 0)
+                
+                # Compute mIoU per class
+                miou_per_class = []
+                for c in range(1, args.nb_class + 1):
+                    class_ious = [iou for iou, cls in zip(all_iou_per_polygon, all_gt_classes_per_polygon) if cls == c]
+                    if class_ious:
+                        miou_per_class.append(float(np.mean(class_ious) * 100))
+                    else:
+                        miou_per_class.append(0.0)
+                
+                global_component_metrics["global/miou/avgMIoU"] = avg_miou
+                global_component_metrics["global/miou/MIoU_per_class"] = miou_per_class
+                global_component_metrics["global/miou/n_polygons_evaluated"] = len(all_iou_per_polygon)
+                global_component_metrics["global/miou/n_polygons_matched"] = n_matched
+                
+                logger.info(f"Global mIoU per polygon: {avg_miou:.2f}%")
+            
             save_yaml(global_component_metrics, global_component_metrics_path)
             logger.info(f"Global F1 by component: {global_component_metrics['global/component/avgF1']:.2f}%")
             logger.info(f"Total components evaluated: {global_component_metrics['global/component/n_components']}")
@@ -1987,9 +2036,21 @@ if __name__ == "__main__":
     args_path = parser.parse_args().file_path
     
     args = load_args(args_path)
-    print("Args loaded from",  )
+    print(f"Args loaded from: {args_path}")
+    print(f"Model directory: {args.model_dir}")
+    print(f"Architecture: {args.arch}")
+    print(f"Input dimension: {args.input_dimension}")
+    print(f"Dropout rate: {args.dropout_rate}")
+    print(f"Number of iterations: {args.num_iter}")
 
-    version_name = os.path.split(args.data_path)[-1]
+    # Use model_dir name for version/experiment name instead of data_path
+    if hasattr(args, 'model_dir') and args.model_dir:
+        version_name = os.path.split(args.model_dir)[-1]
+        # If split returns empty (e.g. path ends with /), try dirname
+        if not version_name:
+            version_name = os.path.split(os.path.dirname(args.model_dir))[-1]
+    else:
+        version_name = os.path.split(args.data_path)[-1]
 
     logger = create_logger(module_name=__name__, filename=version_name)
 
