@@ -16,7 +16,7 @@ from src.io_operations import read_yaml
 args = None # Removed hardcoded loading of args.yaml
 
 
-def evaluate_metrics(pred:Union[np.ndarray, torch.Tensor], gt:Union[np.ndarray, torch.Tensor], num_class:int = args.nb_class) -> dict:
+def evaluate_metrics(pred:Union[np.ndarray, torch.Tensor], gt:Union[np.ndarray, torch.Tensor], num_class:int = 4) -> dict:
     """Calculte the metrics:
     Accuracy, F1 Score, Precision, and Recall.
     Calculate based on the pred with highest probability and the gt - ground truth segmentation.
@@ -106,7 +106,7 @@ def evaluate_metrics(pred:Union[np.ndarray, torch.Tensor], gt:Union[np.ndarray, 
 
 def evaluate_f1(pred:Union[np.ndarray, torch.Tensor], 
                 gt:Union[np.ndarray, torch.Tensor], 
-                num_class:int = args.nb_class,
+                num_class:int = 4,
                 average:Literal[None, "micro", "macro", "weighted"] = "macro") -> float:
     """Calculte the F1 Score macro average
 
