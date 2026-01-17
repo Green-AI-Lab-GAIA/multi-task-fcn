@@ -18,6 +18,7 @@ debug_folder
 *.ppk
 wandb
 results/
+.venv/
 *.zip
 *.pem
 *.out
