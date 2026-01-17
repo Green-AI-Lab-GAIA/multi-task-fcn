@@ -22,6 +22,7 @@ import rasterio
 import torch
 import torch.distributed as dist
 import yaml
+import warnings
 
 ROOT_PATH = dirname(dirname(__file__))
 sys.path.append(ROOT_PATH)
@@ -500,8 +501,13 @@ def restore_checkpoint_variables(checkpoint_path:str)->dict:
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     for key in to_restore.keys():
-        to_restore[key] = checkpoint[key]
-    
+        
+        if key in checkpoint.keys():
+            to_restore[key] = checkpoint[key]
+        
+        else:
+            logger.warning(f"Key {key} is not saved in checkpoint. The {to_restore[key]} were assumed")
+            
     return to_restore.copy()
 
 def fix_random_seeds(seed=31):
