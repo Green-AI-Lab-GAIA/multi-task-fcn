@@ -103,6 +103,11 @@ stream_handler.setFormatter(formatter)
 # Add the handler to the logger
 logger.addHandler(stream_handler)
 
+
+
+
+
+
 class DatasetForInference(Dataset):
     def __init__(self,
                 image_path:str,
@@ -308,7 +313,7 @@ def evaluate_overlap(overlap:float,
     current_model_folder = join(current_iter_folder, args.model_dir)
 
     test_dataset = DatasetForInference(
-        args.ortho_image,
+        ORTHOIMAGE_PATH,
         args.size_crops,
         overlap,
         mask=(TEST_GT > 0)
@@ -367,7 +372,7 @@ def evaluate_overlap(overlap:float,
 
 def evaluate_iteration(current_iter_folder:str, args:dict):
 
-    ortho_image_metadata = get_image_metadata(args.ortho_image)
+    ortho_image_metadata = get_image_metadata(ORTHOIMAGE_PATH)
     
     ortho_image_shape = (ortho_image_metadata["count"], ortho_image_metadata["height"], ortho_image_metadata["width"])
     
@@ -434,8 +439,6 @@ def get_iter_folders(output_folder):
     iter_folders = iter_folders[1:-1].copy()
     
     return iter_folders.copy()
-
-
 
 if __name__ == "__main__":
     
