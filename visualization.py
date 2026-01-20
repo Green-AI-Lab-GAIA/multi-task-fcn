@@ -56,7 +56,7 @@ def generate_view_for_sythentic_label(current_iter_folder: str, train_segmentati
     check_folder(OUTPUT_MAP_FOLDER)
 
 
-    plt.figure(dpi = 1200)
+    fig, ax = plt.subplots(dpi=500)
 
     ORTHOIMAGE = read_tiff(orthoimage_path)
     ORTHOIMAGE = np.moveaxis(ORTHOIMAGE, 0, 2)
@@ -77,16 +77,112 @@ def generate_view_for_sythentic_label(current_iter_folder: str, train_segmentati
     if ORTHOIMAGE.max() > 255:
         ORTHOIMAGE = np.divide(ORTHOIMAGE, np.quantile(ORTHOIMAGE, 0.99, axis=(0,1)))
 
-    plt.imshow(ORTHOIMAGE)
+    ax.imshow(ORTHOIMAGE)
     del ORTHOIMAGE
 
     # plot contours
     for contour in find_contours(synthetic_labels):
-        plt.plot(contour[:, 1], contour[:, 0], linewidth=0.3, color = "red", label = "Prediction")
+        ax.plot(contour[:, 1], contour[:, 0], linewidth=0.3, color = "red", label = "Prediction")
 
-    plt.axis('off')
-    plt.savefig(join(OUTPUT_MAP_FOLDER, f"{current_iter:03d}{region_suffix}_segmentation.png"), bbox_inches='tight', pad_inches=0)
-    plt.close()
+    ax.axis('off')
+    fig.savefig(join(OUTPUT_MAP_FOLDER, f"{current_iter:03d}{region_suffix}_segmentation.png"), bbox_inches='tight', pad_inches=0)
+    plt.close(fig)
+
+
+# generate view only for synthetic selected labels
+def generate_view_for_synthetic_selected_label(current_iter_folder: str, train_segmentation_path: str, orthoimage_path: str, region_suffix: str = ""):
+    """Generate visualization for synthetic selected labels (selected predictions not in ground truth).
+    
+    Parameters
+    ----------
+    current_iter_folder : str
+        Path to iteration folder (or region folder for multi-region)
+    train_segmentation_path : str
+        Path to ground truth segmentation
+    orthoimage_path : str
+        Path to orthoimage
+    region_suffix : str
+        Suffix for multi-region support
+    """
+    # Handle both iter folder and region folder formats
+    folder_name = current_iter_folder.split("/")[-1].split("\\")[-1]
+    if folder_name.startswith("region_"):
+        parent_folder = dirname(current_iter_folder)
+        current_iter = int(parent_folder.split("iter_")[-1].split("/")[0].split("\\")[0])
+        region_suffix = f"_{folder_name}"
+    else:
+        current_iter = int(current_iter_folder.split("iter_")[-1].split("/")[0].split("\\")[0])
+    
+    if current_iter == 0:
+        SELECTED_LABELS_PATH = join(train_segmentation_path)
+        
+    else:
+        SELECTED_LABELS_PATH = join(current_iter_folder, "new_labels", "selected_labels_set.tif")
+
+    SELECTED_LABELS_MAP = read_tiff(SELECTED_LABELS_PATH)
+
+    TRAIN_GT_MAP = read_tiff(train_segmentation_path)
+
+    synthetic_selected_labels = np.where(TRAIN_GT_MAP > 0, 0, SELECTED_LABELS_MAP)
+    
+    # folder to save view - go up from region folder if needed
+    if folder_name.startswith("region_"):
+        base_folder = dirname(dirname(current_iter_folder))
+    else:
+        base_folder = dirname(current_iter_folder)
+    
+    OUTPUT_MAP_FOLDER = join(base_folder, "visualization", "synthetic_selected_labels")
+    check_folder(OUTPUT_MAP_FOLDER)
+
+
+    fig, ax = plt.subplots(dpi=500)
+
+    ORTHOIMAGE = read_tiff(orthoimage_path)
+    ORTHOIMAGE = np.moveaxis(ORTHOIMAGE, 0, 2)
+    
+    # Select appropriate bands based on number of channels
+    num_channels = ORTHOIMAGE.shape[-1]
+    if num_channels == 25:
+        # Hyperspectral - use bands 5, 3, 2
+        ORTHOIMAGE = ORTHOIMAGE[..., [5,3,2]].copy()
+    elif num_channels == 4:
+        # 4-band image (e.g., RGB + NIR) - use first 3 bands (RGB)
+        ORTHOIMAGE = ORTHOIMAGE[..., [0,1,2]].copy()
+    elif num_channels > 3:
+        # Multi-band - use first 3 bands
+        ORTHOIMAGE = ORTHOIMAGE[..., [0,1,2]].copy()
+    # If 3 or less bands, keep as is
+    
+    # Normalize image values
+    if ORTHOIMAGE.max() > 255:
+        quantiles = np.quantile(ORTHOIMAGE, 0.99, axis=(0,1), keepdims=True)
+        # Avoid division by zero
+        quantiles = np.where(quantiles == 0, 1, quantiles)
+        ORTHOIMAGE = np.divide(ORTHOIMAGE, quantiles)
+        # Clip to valid range [0, 1] for imshow
+        ORTHOIMAGE = np.clip(ORTHOIMAGE, 0, 1)
+    
+    # Ensure valid shape and values
+    if ORTHOIMAGE.ndim == 2:
+        # Single channel - convert to 3D
+        ORTHOIMAGE = ORTHOIMAGE[..., np.newaxis]
+    if ORTHOIMAGE.shape[-1] == 1:
+        # Single channel - replicate to RGB
+        ORTHOIMAGE = np.repeat(ORTHOIMAGE, 3, axis=-1)
+    
+    # Ensure no NaN or Inf values
+    ORTHOIMAGE = np.nan_to_num(ORTHOIMAGE, nan=0.0, posinf=1.0, neginf=0.0)
+    
+    ax.imshow(ORTHOIMAGE)
+    del ORTHOIMAGE
+
+    # plot contours
+    for contour in find_contours(synthetic_selected_labels):
+        ax.plot(contour[:, 1], contour[:, 0], linewidth=0.3, color = "red", label = "Prediction")
+
+    ax.axis('off')
+    fig.savefig(join(OUTPUT_MAP_FOLDER, f"{current_iter:03d}{region_suffix}_segmentation.png"), bbox_inches='tight', pad_inches=0)
+    plt.close(fig)
 
 
 
@@ -154,7 +250,7 @@ def generate_labels_view(current_iter_folder: str, orthoimage_path: str, train_s
     ALL_LABELS_OUT_FOLDER = join(OUTPUT_MAP_FOLDER, "all_labels",)
     check_folder(ALL_LABELS_OUT_FOLDER)
     
-    fig, ax = plt.subplots(dpi = 1200)
+    fig, ax = plt.subplots(dpi = 500)
     ax.imshow(ALL_LABELS_MAP, cmap=DEFAULT_COLORS, interpolation="bilinear")
     ax.axis('off')
     fig.savefig(join(ALL_LABELS_OUT_FOLDER, f"{current_iter:03d}{region_suffix}_segmentation.png"), bbox_inches='tight', pad_inches=0)
@@ -165,7 +261,7 @@ def generate_labels_view(current_iter_folder: str, orthoimage_path: str, train_s
     SELECTED_LABELS_OUT_FOLDER = join(OUTPUT_MAP_FOLDER, "selected_labels")
     check_folder(SELECTED_LABELS_OUT_FOLDER)
 
-    fig, ax = plt.subplots(dpi = 1200)
+    fig, ax = plt.subplots(dpi = 500)
     ax.imshow(SELECTED_LABELS_MAP, cmap=DEFAULT_COLORS)
     ax.axis('off')
     fig.savefig(join(SELECTED_LABELS_OUT_FOLDER, f"{current_iter:03d}{region_suffix}_segmentation.png"), bbox_inches='tight', pad_inches=0)
@@ -177,6 +273,13 @@ def generate_labels_view(current_iter_folder: str, orthoimage_path: str, train_s
         current_iter_folder=current_iter_folder,
         train_segmentation_path=train_segmentation_path,
         orthoimage_path=orthoimage_path
+    )
+
+    generate_view_for_synthetic_selected_label(
+        current_iter_folder=current_iter_folder,
+        train_segmentation_path=train_segmentation_path,
+        orthoimage_path=orthoimage_path,
+        region_suffix=region_suffix
     )
 
 
