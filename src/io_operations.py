@@ -202,8 +202,8 @@ def get_region_paths(args: dict, region_idx: int) -> dict:
 def generate_mask_from_orthoimage(
     ortho_image_path: str,
     output_path: str = None,
-    make_convex: bool = True,
-    fill_holes: bool = True,
+    make_convex: bool = False,
+    fill_holes: bool = False,
     save_preview: bool = True,
     preview_max_size: int = 1024,
 ) -> np.ndarray:
@@ -220,9 +220,10 @@ def generate_mask_from_orthoimage(
     output_path : str, optional
         Path to save the generated mask TIFF. If None, mask is not saved.
     make_convex : bool, optional
-        If True, creates a convex hull of the valid region. Default True.
+        If True, creates a convex hull of the valid region. Default False.
+        Warning: Can create a mask that covers the entire image if pixels are spread out.
     fill_holes : bool, optional
-        If True, fills holes in the mask. Default True.
+        If True, fills holes in the mask. Default False.
     save_preview : bool, optional
         If True, saves a low-resolution PNG preview alongside the TIFF. Default True.
     preview_max_size : int, optional
@@ -237,11 +238,11 @@ def generate_mask_from_orthoimage(
     
     # Read the orthoimage
     ortho = read_tiff(ortho_image_path)
-    
+    ortho = ortho[:3, :, :]
     # Handle different shapes: (bands, height, width) or (height, width)
     if ortho.ndim == 3:
         # Multiband image: pixel is non-empty if ANY channel is non-zero
-        mask = np.any(ortho != 0, axis=0)
+        mask = np.all(ortho >= 0, axis=0)
         logger.info(f"Multiband image with shape {ortho.shape}")
     else:
         # Single band image
@@ -312,8 +313,13 @@ def _save_mask_preview(
     # Derive PNG path from TIFF path
     png_path = splitext(tiff_path)[0] + "_preview.png"
     
-    # Convert mask to 0-255 range for visualization
-    mask_vis = (mask * 255).astype(np.uint8)
+    # Convert mask to 0-255 range for visualization (PNG requires uint8)
+    # If mask is already in 0-1 range, multiply by 255
+    if mask.max() <= 1.0:
+        mask_vis = (mask * 255).astype(np.uint8)
+    else:
+        # Mask is already in 0-255 range
+        mask_vis = mask.astype(np.uint8)
     
     # Create PIL image
     img = Image.fromarray(mask_vis, mode='L')
@@ -348,8 +354,8 @@ def get_or_generate_mask_path(
     args: dict, 
     region_idx: int, 
     data_path: str = None,
-    make_convex: bool = True,
-    fill_holes: bool = True,
+    make_convex: bool = False,
+    fill_holes: bool = False,
 ) -> Optional[str]:
     """
     Get mask path for a region, generating it automatically if not provided.
@@ -366,9 +372,10 @@ def get_or_generate_mask_path(
     data_path : str, optional
         Base data path for saving generated masks. If None, uses args['data_path']
     make_convex : bool, optional
-        If True, creates a convex hull of the valid region. Default True.
+        If True, creates a convex hull of the valid region. Default False.
+        Warning: Can create a mask that covers the entire image.
     fill_holes : bool, optional
-        If True, fills holes in the mask. Default True.
+        If True, fills holes in the mask. Default False.
         
     Returns
     -------
