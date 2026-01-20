@@ -1,0 +1,18 @@
+# Configuration for nbstripout
+# This ensures outputs and metadata are stripped from notebooks
+
+# Strip execution counts (prompt numbers)
+keep-count: false
+
+# Strip outputs
+keep-output: false
+
+# Strip metadata (keeps only essential notebook structure)
+# Remove all metadata except what's necessary for the notebook to function
+extra-keys: []
+
+# Drop empty cells
+drop-empty-cells: false
+
+# Strip tagged cells (useful for removing test/debug cells)
+drop-tagged-cells: []
