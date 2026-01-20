@@ -87,6 +87,10 @@ class DatasetFromCoord(Dataset):
         
         self.image_shape = self.image.shape
         
+        # Store normalization statistics instead of normalizing entire image
+        self.normalization_stats = None  # Dict: {"mean": [...], "std": [...]}
+        self._image_normalized = False  # Flag to track if image is normalized
+        
         self.generate_coords()
 
 
@@ -104,10 +108,26 @@ class DatasetFromCoord(Dataset):
 
 
     def standardize_image_channels(self):
+        """Compute normalization statistics for the image.
         
-        self.image = self.image.astype("float32")
-
-        normalize(self.image)
+        Instead of normalizing entire image in memory (which causes OOM),
+        we compute mean/std statistics once and normalize crops on-the-fly during __getitem__.
+        """
+        # Compute mean and std for each channel (without converting to float32)
+        img = self.image
+        num_channels = img.shape[0]
+        means = []
+        stds = []
+        
+        for ch in range(num_channels):
+            channel_data = img[ch].astype("float64")  # Use float64 for precision in stats
+            mean = np.mean(channel_data)
+            std = np.std(channel_data, ddof=0)
+            means.append(float(mean))
+            stds.append(float(std))
+        
+        self.normalization_stats = {"mean": means, "std": stds}
+        self._image_normalized = True
 
     def _resize_tensor(self, tensor: torch.Tensor, target_size: int, mode: str = 'bilinear') -> torch.Tensor:
         """Resize a tensor to target_size with better downsampling defaults.
@@ -240,6 +260,16 @@ class DatasetFromCoord(Dataset):
             crop_size=current_crop_size,
         )
         
+        # Normalize crop on-the-fly using precomputed statistics (lazy normalization)
+        if self._image_normalized and self.normalization_stats:
+            image = image.float()  # Convert to float32
+            for ch in range(image.shape[0]):
+                mean = self.normalization_stats["mean"][ch]
+                std = self.normalization_stats["std"][ch]
+                if std > 0:
+                    image[ch] = (image[ch] - mean) / std
+                else:
+                    image[ch] = image[ch] - mean
 
         segmentation = self.read_window_around_coord(
             coord=current_coord,
@@ -573,6 +603,11 @@ class MultiRegionDatasetFromCoord(Dataset):
         self.img_depths = []
         self.image_shapes = []
         
+        # Store normalization statistics instead of normalizing entire images
+        # This avoids keeping normalized full images in memory
+        self.normalization_stats = []  # List of dicts: [{"mean": [...], "std": [...]}, ...]
+        self._images_normalized = False  # Flag to track if images are normalized
+        
         for i in range(self.num_regions):
             img = load_image(image_paths[i])
             seg = load_image(segmentation_paths[i])
@@ -635,10 +670,31 @@ class MultiRegionDatasetFromCoord(Dataset):
         return np.vstack(balanced_coords)
 
     def standardize_image_channels(self):
-        """Normalize all images in place."""
+        """Compute normalization statistics for all images.
+        
+        Instead of normalizing entire images in memory (which causes OOM),
+        we compute mean/std statistics once and normalize crops on-the-fly during __getitem__.
+        This dramatically reduces memory usage.
+        """
+        # Compute normalization statistics without normalizing entire images
+        self.normalization_stats = []
         for i in range(self.num_regions):
-            self.images[i] = self.images[i].astype("float32")
-            normalize(self.images[i])
+            # Compute mean and std for each channel (without converting to float32)
+            img = self.images[i]
+            num_channels = img.shape[0]
+            means = []
+            stds = []
+            
+            for ch in range(num_channels):
+                channel_data = img[ch].astype("float64")  # Use float64 for precision in stats
+                mean = np.mean(channel_data)
+                std = np.std(channel_data, ddof=0)
+                means.append(float(mean))
+                stds.append(float(std))
+            
+            self.normalization_stats.append({"mean": means, "std": stds})
+        
+        self._images_normalized = True
 
     def _resize_tensor(self, tensor: torch.Tensor, target_size: int, mode: str = 'bilinear') -> torch.Tensor:
         """Resize a tensor to target_size.
@@ -744,6 +800,18 @@ class MultiRegionDatasetFromCoord(Dataset):
         image = self.read_window_around_coord(coord=current_coord, image=image_data, crop_size=current_crop_size)
         segmentation = self.read_window_around_coord(coord=current_coord, image=seg_data, crop_size=current_crop_size)
         distance_map = self.read_window_around_coord(coord=current_coord, image=depth_data, crop_size=current_crop_size)
+        
+        # Normalize crop on-the-fly using precomputed statistics (lazy normalization)
+        if self._images_normalized and self.normalization_stats:
+            stats = self.normalization_stats[region_idx]
+            image = image.float()  # Convert to float32
+            for ch in range(image.shape[0]):
+                mean = stats["mean"][ch]
+                std = stats["std"][ch]
+                if std > 0:
+                    image[ch] = (image[ch] - mean) / std
+                else:
+                    image[ch] = image[ch] - mean
         
         if self.augment:
             # Horizontal Flip

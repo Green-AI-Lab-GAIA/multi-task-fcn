@@ -727,13 +727,20 @@ def train_iteration(current_iter_folder: str, args: dict):
             max_crop_size=None
         )
     
-    logger.info("[DEBUG] Starting standardize_image_channels for train_dataset...")
-    train_dataset.standardize_image_channels()
-    logger.info("[DEBUG] Finished standardize_image_channels for train_dataset")
+    # CRITICAL FIX: Lazy normalization - compute statistics only, normalize crops on-the-fly
+    # This avoids keeping normalized full images in memory (saves ~75 GB)
+    logger.info("[DEBUG] Computing normalization statistics (lazy normalization)...")
     
-    logger.info("[DEBUG] Starting standardize_image_channels for val_dataset...")
+    logger.info("[DEBUG] Computing statistics for val_dataset...")
     val_dataset.standardize_image_channels()
-    logger.info("[DEBUG] Finished standardize_image_channels for val_dataset")
+    
+    logger.info("[DEBUG] Computing statistics for train_dataset...")
+    train_dataset.standardize_image_channels()
+    
+    # Free memory after computing statistics
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     logger.info(f"[DEBUG] Creating train_loader with batch_size={args.batch_size}, workers={args.workers}")
     train_loader = torch.utils.data.DataLoader(

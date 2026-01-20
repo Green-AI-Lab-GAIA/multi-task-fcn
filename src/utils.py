@@ -617,11 +617,13 @@ def normalize(img:np.ndarray):
     """
     # iterate through channels and standardize
     for i in range(img.shape[0]):
-        
         std = np.std(img[i], ddof=0)
         mean = np.mean(img[i])
 
-        img[i] = (img[i]-mean)/std
+        if std == 0:
+            img[i] = img[i] - mean  # Just center, don't divide by zero
+        else:
+            img[i] = (img[i]-mean)/std
     
 
 
