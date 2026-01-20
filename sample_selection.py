@@ -310,20 +310,24 @@ def select_n_labels_by_class(pred_labels:np.ndarray, samples_by_class:int = 5):
 
 
 def filter_components_by_mask(pred_map:np.ndarray, mask_path:str):
-    """Remove labels and components out of the mask.tif area
+    """Remove labels and components that touch area outside the mask.tif study area
+
+    Only keeps components that are completely inside the mask (100% inside).
+    Components that touch any area outside the mask are removed.
 
     Parameters
     ----------
     pred_map : np.ndarray
         The labels map from the current iteration.
     mask_path : str
-        The path to the mask.tif file
+        The path to the mask.tif file (1 = valid study area, 0 = outside)
     """
     
     mask = read_tiff(mask_path)
     
-    if not mask.dtype == "bool":
-        mask = np.where(mask > 0, False, True)
+    # Convert mask to boolean: True = valid area, False = outside
+    if mask.dtype != bool:
+        mask = mask > 0
 
     # Skip the mask filter if the mask array is entirely False
     if np.sum(mask) == 0:
@@ -331,19 +335,21 @@ def filter_components_by_mask(pred_map:np.ndarray, mask_path:str):
 
     components_pred_map = label(pred_map)
     
-    # Components with some peace out the mask
-    components_to_check = np.unique(components_pred_map[mask])
-    components_to_check = components_to_check[np.nonzero(components_to_check)]
+    # Get all components that have at least one pixel
+    all_components = np.unique(components_pred_map)
+    all_components = all_components[np.nonzero(all_components)]
     
-    print("Filtering components out of the area of the experiment")
-    for component in tqdm(np.unique(components_to_check)):
+    print("Filtering components to ensure all are completely within study area")
+    for component in tqdm(all_components):
 
-        component_filter = components_pred_map==component
+        component_filter = components_pred_map == component
         
-        area_out_mask = np.mean( mask[component_filter])
+        # Calculate ratio of component area that is OUTSIDE the mask
+        # mask is True for valid area, so ~mask is True for outside area
+        area_out_mask = np.mean(~mask[component_filter])
         
-        # if more than 20% of the component is out, remove it
-        if area_out_mask >= 0.20:
+        # Remove component if ANY part is outside the mask (0% tolerance)
+        if area_out_mask > 0.0:
             pred_map[component_filter] = 0
             components_pred_map[component_filter] = 0
 
@@ -628,7 +634,6 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
     selected_labels_set = join_labels_set(ground_truth_map, selected_labels_set, 0.01 )
     selected_labels_set = convert_to_minor_numeric_type(selected_labels_set)
 
-
     logger.info("Joining the old components updated shape with the new components")
     # join the old labels set with the new labels. unbalanced sample addition
     all_labels_set = join_labels_set(unbalanced_delta, old_selected_labels_updated, 0.10)
@@ -638,6 +643,13 @@ def get_new_segmentation_sample(ground_truth_map:np.ndarray,
     # Adding the ground truth segmentation
     all_labels_set = join_labels_set(ground_truth_map, all_labels_set, 0.01)
     all_labels_set = convert_to_minor_numeric_type(all_labels_set)
+
+    # Apply mask filter to final sets to ensure no component touches area outside study area
+    if hasattr(args, 'mask_path') and args.mask_path:
+        logger.info("Filtering final sets by mask to ensure all components are within study area")
+        filter_components_by_mask(selected_labels_set, mask_path=args.mask_path)
+        filter_components_by_mask(all_labels_set, mask_path=args.mask_path)
+        logger.info(f"After final mask filter: {np.sum(all_labels_set > 0)} pixels in all_labels, {np.sum(selected_labels_set > 0)} pixels in selected_labels")
 
     return all_labels_set, selected_labels_set
 
