@@ -21,6 +21,8 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
+import torch
+import torch.nn as nn
 from rasterio import features
 from rasterio.transform import Affine
 from scipy.ndimage import distance_transform_edt, gaussian_filter
@@ -679,24 +681,27 @@ def filter_by_geometric_properties_vector(
 def filter_by_mask_vector(
     gdf: gpd.GeoDataFrame,
     mask_path: str,
-    max_outside_ratio: float = 0.20,
+    max_outside_ratio: float = 0.0,
 ) -> gpd.GeoDataFrame:
     """
-    Filter components that are mostly outside a mask (vector-based).
+    Filter components that are outside the study area mask (vector-based).
+    
+    Only keeps components that are completely inside the mask (100% inside).
+    Components that touch any area outside the mask are removed.
     
     Parameters
     ----------
     gdf : gpd.GeoDataFrame
         Input GeoDataFrame
     mask_path : str
-        Path to mask TIFF
+        Path to mask TIFF (1 = valid study area, 0 = outside)
     max_outside_ratio : float
-        Maximum ratio of area outside mask (0.20 = 20%)
+        Maximum ratio of area outside mask (default 0.0 = 0%, must be 100% inside)
     
     Returns
     -------
     gpd.GeoDataFrame
-        Filtered GeoDataFrame
+        Filtered GeoDataFrame with only components completely inside the mask
     """
     if gdf.empty:
         return gdf.copy()
@@ -732,9 +737,12 @@ def filter_by_mask_vector(
         geom = row.geometry
         intersection = geom.intersection(valid_union)
         
+        # Component must be completely inside the mask (100% inside)
+        # Check if the intersection area equals the component area
         if not intersection.is_empty:
             inside_ratio = intersection.area / geom.area
-            if inside_ratio >= (1 - max_outside_ratio):
+            # Use a small tolerance for floating point precision
+            if inside_ratio >= (1 - max_outside_ratio - 1e-9):
                 keep_indices.append(idx)
     
     return gdf.loc[keep_indices].copy()
@@ -771,6 +779,425 @@ def select_n_labels_by_class_vector(
     selected = gdf_shuffled.groupby('tree_type').head(samples_by_class)
     
     return selected.copy()
+
+
+# =============================================================================
+# FEATURE-BASED SAMPLE SELECTION
+# =============================================================================
+
+def extract_patch_and_mask(
+    polygon, 
+    polygon_crs, 
+    region_idx, 
+    ortho_info_list, 
+    crop_size=1024
+):
+    """
+    Extract a patch centered on the polygon centroid and create a binary mask.
+    
+    Parameters
+    ----------
+    polygon : shapely.geometry
+        The polygon geometry
+    polygon_crs : CRS
+        The CRS of the polygon
+    region_idx : int
+        Index of the region (orthoimage) to use
+    ortho_info_list : list
+        List of dicts with orthoimage metadata
+    crop_size : int
+        Size of the patch to extract (default: 1024)
+    
+    Returns
+    -------
+    tuple
+        (patch, mask, valid) where:
+        - patch: numpy array of shape (C, H, W)
+        - mask: numpy array of shape (H, W) with binary mask
+        - valid: bool indicating if extraction was successful
+    """
+    if region_idx is None or (isinstance(region_idx, float) and np.isnan(region_idx)):
+        return None, None, False
+    
+    region_idx = int(region_idx)
+    if region_idx >= len(ortho_info_list):
+        return None, None, False
+    
+    info = ortho_info_list[region_idx]
+    
+    # Reproject polygon to orthoimage CRS if needed
+    if polygon_crs != info['crs']:
+        temp_gdf = gpd.GeoDataFrame(geometry=[polygon], crs=polygon_crs)
+        temp_gdf = temp_gdf.to_crs(info['crs'])
+        polygon_reproj = temp_gdf.geometry.iloc[0]
+    else:
+        polygon_reproj = polygon
+    
+    # Get centroid in pixel coordinates
+    centroid = polygon_reproj.centroid
+    transform = info['transform']
+    
+    # Convert centroid to pixel coordinates
+    col_center = int((centroid.x - transform.c) / transform.a)
+    row_center = int((centroid.y - transform.f) / transform.e)
+    
+    # Calculate window bounds
+    half_size = crop_size // 2
+    col_start = col_center - half_size
+    row_start = row_center - half_size
+    
+    # Ensure window is within image bounds
+    col_start = max(0, min(col_start, info['width'] - crop_size))
+    row_start = max(0, min(row_start, info['height'] - crop_size))
+    
+    # Create window
+    from rasterio.windows import Window
+    window = Window(col_start, row_start, crop_size, crop_size)
+    
+    # Calculate transform for the window
+    window_transform = rasterio.windows.transform(window, transform)
+    
+    try:
+        with rasterio.open(info['path']) as src:
+            # Read patch
+            patch = src.read(window=window)
+            
+            # Handle edge cases where patch might be smaller than crop_size
+            if patch.shape[1] != crop_size or patch.shape[2] != crop_size:
+                # Pad with zeros
+                padded_patch = np.zeros((patch.shape[0], crop_size, crop_size), dtype=patch.dtype)
+                padded_patch[:, :patch.shape[1], :patch.shape[2]] = patch
+                patch = padded_patch
+        
+        # Create binary mask by rasterizing the polygon
+        mask = features.rasterize(
+            [(polygon_reproj, 1)],
+            out_shape=(crop_size, crop_size),
+            transform=window_transform,
+            fill=0,
+            dtype=np.uint8
+        )
+        
+        return patch, mask, True
+        
+    except Exception as e:
+        logger = getLogger("__main__")
+        logger.warning(f"Error extracting patch: {e}")
+        return None, None, False
+
+
+def extract_backbone_features(model, x):
+    """
+    Extract features from the ResNet50 backbone (before ASPP).
+    
+    Parameters
+    ----------
+    model : DeepLabv3
+        The DeepLabv3 model
+    x : torch.Tensor
+        Input tensor of shape (B, C, H, W)
+    
+    Returns
+    -------
+    torch.Tensor
+        Feature tensor of shape (B, 2048)
+    """
+    import torch.nn.functional as F
+    
+    backbone = model.model.backbone
+    
+    # Apply batch normalization if the model has it
+    if model.batch_norm:
+        x = model.batch_norm_layer(x)
+    
+    # Forward through backbone layers
+    x = backbone.conv1(x)
+    x = backbone.bn1(x)
+    x = backbone.relu(x)
+    x = backbone.maxpool(x)
+    x = backbone.layer1(x)
+    x = backbone.layer2(x)
+    x = backbone.layer3(x)
+    x = backbone.layer4(x)  # Output shape: (B, 2048, H/32, W/32)
+    
+    # Global Average Pooling
+    features = F.adaptive_avg_pool2d(x, (1, 1))
+    
+    return features.flatten(1)  # Shape: (B, 2048)
+
+
+def preprocess_patch(patch, input_dimension):
+    """
+    Preprocess a patch for model inference.
+    
+    Parameters
+    ----------
+    patch : numpy.ndarray
+        Patch of shape (C, H, W)
+    input_dimension : int
+        Target size for model input
+    
+    Returns
+    -------
+    torch.Tensor
+        Preprocessed tensor of shape (1, C, input_dimension, input_dimension)
+    """
+    import torch
+    import torch.nn.functional as F
+    
+    # Convert to float32 and normalize
+    patch = patch.astype(np.float32)
+    
+    # Normalize each channel (in-place)
+    for i in range(patch.shape[0]):
+        channel = patch[i]
+        mean = channel.mean()
+        std = channel.std()
+        if std > 0:
+            patch[i] = (channel - mean) / std
+    
+    # Convert to tensor
+    tensor = torch.from_numpy(patch).unsqueeze(0)  # (1, C, H, W)
+    
+    # Resize to input_dimension
+    if tensor.shape[-1] != input_dimension or tensor.shape[-2] != input_dimension:
+        tensor = F.interpolate(
+            tensor,
+            size=(input_dimension, input_dimension),
+            mode='bilinear',
+            align_corners=False
+        )
+    
+    return tensor
+
+
+def compute_features(patch, mask, model, input_dimension, crop_size, device):
+    """
+    Compute backbone features for a patch.
+    
+    Parameters
+    ----------
+    patch : numpy.ndarray
+        Patch of shape (C, H, W)
+    mask : numpy.ndarray
+        Binary mask of shape (H, W) - not used but kept for consistency
+    model : nn.Module
+        The DeepLabv3 model
+    input_dimension : int
+        Size of model input
+    crop_size : int
+        Original crop size
+    device : torch.device
+        Device to run inference on
+    
+    Returns
+    -------
+    numpy.ndarray
+        Feature vector of shape (2048,)
+    """
+    import torch
+    
+    # Preprocess
+    tensor = preprocess_patch(patch, input_dimension)
+    tensor = tensor.to(device, dtype=torch.float)
+    
+    with torch.no_grad():
+        # Extract backbone features
+        features = extract_backbone_features(model, tensor)
+        features = features.cpu().numpy().flatten()
+    
+    return features
+
+
+def cosine_distance(query_feature, train_features, aggregation_method="mean"):
+    """
+    Calculate cosine distance between a query feature and training features.
+    
+    Parameters
+    ----------
+    query_feature : numpy.ndarray
+        Query feature vector of shape (2048,)
+    train_features : numpy.ndarray
+        Training features of shape (N, 2048)
+    aggregation_method : str, optional
+        Method to aggregate distances: "mean" (default) or "min"
+        - "mean": calculates mean distance to all training samples
+        - "min": calculates minimum distance to training samples
+    
+    Returns
+    -------
+    float
+        Aggregated cosine distance (mean or min)
+    """
+    from scipy.spatial.distance import cosine
+    
+    if len(train_features) == 0:
+        return np.nan
+    
+    distances = [cosine(query_feature, tf) for tf in train_features]
+    
+    if aggregation_method == "min":
+        return np.min(distances)
+    else:  # "mean" (default)
+        return np.mean(distances)
+
+
+def select_n_labels_by_feature_distance(
+    gdf: gpd.GeoDataFrame,
+    model: nn.Module,
+    train_gdf: gpd.GeoDataFrame,
+    ortho_info_list: list,
+    args: dict,
+    samples_by_class: int = 5,
+    crop_size: int = 1024,
+    input_dimension: int = 256,
+    device: torch.device = None,
+    batch_size: int = 8,
+    distance_aggregation_method: str = "mean",
+) -> gpd.GeoDataFrame:
+    """
+    Select N samples per tree_type based on cosine distance in feature space.
+    
+    For each sample, computes backbone features and calculates cosine distance
+    (mean or min) to training samples of the same species. Selects samples with highest distance.
+    
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        Input GeoDataFrame with 'tree_type' and 'region_idx' columns
+    model : nn.Module
+        The DeepLabv3 model (must be in eval mode)
+    train_gdf : gpd.GeoDataFrame
+        GeoDataFrame with training samples (must have 'tree_type' and 'region_idx')
+    ortho_info_list : list
+        List of dicts with orthoimage metadata for each region
+    args : dict
+        Arguments dictionary
+    samples_by_class : int
+        Number of samples to select per class
+    crop_size : int
+        Size of patches to extract
+    input_dimension : int
+        Size of model input
+    device : torch.device
+        Device to run inference on
+    batch_size : int
+        Batch size for processing patches
+    distance_aggregation_method : str
+        Method to aggregate distances: "mean" (default) or "min"
+        - "mean": calculates mean distance to all training samples of same species
+        - "min": calculates minimum distance to training samples of same species
+    
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Selected GeoDataFrame with samples having highest feature distance
+    """
+    import torch
+    
+    logger = getLogger("__main__")
+    
+    if gdf.empty or 'tree_type' not in gdf.columns:
+        logger.warning("Empty GeoDataFrame or missing 'tree_type' column, falling back to random selection")
+        return select_n_labels_by_class_vector(gdf, samples_by_class)
+    
+    if device is None:
+        from src.utils import get_device
+        device = get_device()
+    
+    model.eval()
+    
+    # Group training features by tree_type
+    logger.info("Extracting features from training samples...")
+    train_features_dict = {}
+    
+    for tree_type in sorted(train_gdf['tree_type'].unique()):
+        train_subset = train_gdf[train_gdf['tree_type'] == tree_type]
+        train_features_list = []
+        
+        for idx, row in tqdm(train_subset.iterrows(), total=len(train_subset), desc=f"Train type {tree_type}"):
+            patch, mask, valid = extract_patch_and_mask(
+                row.geometry, train_gdf.crs, row.get('region_idx', 0), 
+                ortho_info_list, crop_size
+            )
+            
+            if not valid:
+                continue
+            
+            features = compute_features(patch, mask, model, input_dimension, crop_size, device)
+            train_features_list.append(features)
+        
+        if train_features_list:
+            train_features_dict[tree_type] = np.array(train_features_list)
+        else:
+            train_features_dict[tree_type] = np.array([]).reshape(0, 2048)
+        
+        logger.info(f"Tree type {tree_type}: {len(train_features_dict[tree_type])} training samples")
+    
+    # Calculate distances for each sample in gdf
+    logger.info(f"Calculating feature distances for candidate samples (aggregation method: {distance_aggregation_method})...")
+    distances = []
+    
+    for idx, row in tqdm(gdf.iterrows(), total=len(gdf), desc="Computing distances"):
+        patch, mask, valid = extract_patch_and_mask(
+            row.geometry, gdf.crs, row.get('region_idx', 0),
+            ortho_info_list, crop_size
+        )
+        
+        if not valid:
+            distances.append(np.nan)
+            continue
+        
+        # Compute features
+        features = compute_features(patch, mask, model, input_dimension, crop_size, device)
+        
+        # Calculate cosine distance (mean or min) to training samples of same class
+        tree_type = row['tree_type']
+        train_feats = train_features_dict.get(tree_type, np.array([]).reshape(0, 2048))
+        
+        dist = cosine_distance(features, train_feats, aggregation_method=distance_aggregation_method)
+        distances.append(dist)
+    
+    # Add distances to dataframe
+    gdf_with_dist = gdf.copy()
+    gdf_with_dist['feature_distance'] = distances
+    
+    # Select top N samples per class by distance (highest distance = most different)
+    selected_list = []
+    
+    for tree_type in sorted(gdf_with_dist['tree_type'].unique()):
+        subset = gdf_with_dist[gdf_with_dist['tree_type'] == tree_type].copy()
+        
+        # Remove NaN distances
+        subset = subset[subset['feature_distance'].notna()]
+        
+        if len(subset) == 0:
+            logger.warning(f"No valid samples for tree_type {tree_type}, skipping")
+            continue
+        
+        # Sort by distance (descending) and select top N
+        subset_sorted = subset.sort_values('feature_distance', ascending=False)
+        selected = subset_sorted.head(samples_by_class)
+        
+        selected_list.append(selected)
+        logger.info(f"Tree type {tree_type}: Selected {len(selected)} samples (distance range: {selected['feature_distance'].min():.4f} - {selected['feature_distance'].max():.4f})")
+    
+    if not selected_list:
+        logger.warning("No samples selected, falling back to random selection")
+        return select_n_labels_by_class_vector(gdf, samples_by_class)
+    
+    # Concatenate and return
+    result = pd.concat(selected_list, ignore_index=True)
+    result = gpd.GeoDataFrame(result, crs=gdf.crs)
+    
+    # Remove temporary distance column
+    if 'feature_distance' in result.columns:
+        result = result.drop(columns=['feature_distance'])
+    
+    # Clear GPU cache
+    torch.cuda.empty_cache()
+    
+    return result
 
 
 # =============================================================================
@@ -928,6 +1355,13 @@ def get_new_segmentation_sample_vector(
     logger.info("Creating all labels set")
     all_labels_gdf = join_labels_vector(unbalanced_delta_gdf, old_selected_updated_gdf, overlap_limit=0.10)
     all_labels_gdf = join_labels_vector(ground_truth_gdf, all_labels_gdf, overlap_limit=0.01)
+    
+    # Apply mask filter to final sets to ensure no component touches area outside study area
+    if mask_path and exists(mask_path):
+        logger.info("Filtering final sets by mask to ensure all components are within study area")
+        selected_labels_gdf = filter_by_mask_vector(selected_labels_gdf, mask_path, max_outside_ratio=0.0)
+        all_labels_gdf = filter_by_mask_vector(all_labels_gdf, mask_path, max_outside_ratio=0.0)
+        logger.info(f"After final mask filter: {len(all_labels_gdf)} all, {len(selected_labels_gdf)} selected")
     
     logger.info(f"Vector selection complete: {len(all_labels_gdf)} all, {len(selected_labels_gdf)} selected")
     
