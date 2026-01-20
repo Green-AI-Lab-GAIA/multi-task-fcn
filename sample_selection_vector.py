@@ -24,6 +24,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from shapely.ops import unary_union
+from skimage.filters import threshold_otsu
 from tqdm import tqdm
 
 # Add parent directory to path for imports
@@ -118,6 +119,111 @@ from src.vector_operations import (
 logger = getLogger("__main__")
 
 
+def calculate_otsu_thresholds_per_class(
+    pred_map: np.ndarray,
+    prob_map: np.ndarray,
+    depth_map: np.ndarray,
+    otsu_sample_size: int = 10000,
+    otsu_random_seed: int = 42,
+    prob_thr: float = None,
+    depth_thr: float = None,
+) -> dict:
+    """
+    Calculate Otsu thresholds per class for filtering predictions.
+    
+    For each unique class in pred_map, filters pixels where pred_map == class,
+    calculates prob_map + depth_map for those pixels, samples randomly if needed,
+    and computes Otsu threshold.
+    
+    Parameters
+    ----------
+    pred_map : np.ndarray
+        Class prediction map (join_class)
+    prob_map : np.ndarray
+        Probability map (join_prob), already smoothed
+    depth_map : np.ndarray
+        Depth/distance map, already smoothed
+    otsu_sample_size : int
+        Size of random sample per class for Otsu calculation
+    otsu_random_seed : int
+        Random seed for reproducibility
+    prob_thr : float, optional
+        Fallback probability threshold if class has too few pixels
+    depth_thr : float, optional
+        Fallback depth threshold if class has too few pixels
+    
+    Returns
+    -------
+    dict
+        Dictionary mapping class_id -> threshold value
+    """
+    thresholds = {}
+    
+    # Get unique classes (excluding background/0)
+    unique_classes = np.unique(pred_map)
+    unique_classes = unique_classes[unique_classes > 0]
+    
+    if len(unique_classes) == 0:
+        logger.warning("No classes found in pred_map (only background)")
+        return thresholds
+    
+    # Set random seed for reproducibility
+    np.random.seed(otsu_random_seed)
+    
+    # Calculate combined map once
+    combined_map = prob_map + depth_map
+    
+    # Calculate fallback threshold if provided
+    fallback_threshold = None
+    if prob_thr is not None and depth_thr is not None:
+        fallback_threshold = prob_thr + depth_thr
+    
+    for class_id in unique_classes:
+        # Create mask for this class
+        class_mask = (pred_map == class_id)
+        
+        # Get combined values for this class
+        combined_values = combined_map[class_mask]
+        
+        if len(combined_values) == 0:
+            logger.warning(f"Class {class_id}: No pixels found, skipping")
+            continue
+        
+        # Handle small classes with fallback
+        if len(combined_values) < 100:
+            if fallback_threshold is not None:
+                threshold = fallback_threshold
+                logger.info(f"Class {class_id}: Too few pixels ({len(combined_values)}), using fallback threshold: {threshold:.4f}")
+            else:
+                threshold = np.mean(combined_values)
+                logger.info(f"Class {class_id}: Too few pixels ({len(combined_values)}), using mean: {threshold:.4f}")
+            thresholds[class_id] = threshold
+            continue
+        
+        # Sample if needed
+        if len(combined_values) > otsu_sample_size:
+            combined_sample = np.random.choice(combined_values, size=otsu_sample_size, replace=False)
+        else:
+            combined_sample = combined_values
+        
+        # Calculate Otsu threshold
+        try:
+            threshold = threshold_otsu(combined_sample)
+            thresholds[class_id] = threshold
+            logger.info(f"Class {class_id}: Otsu threshold = {threshold:.4f} (from {len(combined_values)} pixels, sampled {len(combined_sample)})")
+        except Exception as e:
+            # Fallback if Otsu fails (e.g., all values are the same)
+            if fallback_threshold is not None:
+                threshold = fallback_threshold
+                logger.warning(f"Class {class_id}: Otsu calculation failed ({e}), using fallback threshold: {threshold:.4f}")
+            else:
+                threshold = np.mean(combined_sample)
+                logger.warning(f"Class {class_id}: Otsu calculation failed ({e}), using mean: {threshold:.4f}")
+            thresholds[class_id] = threshold
+    
+    return thresholds
+
+
 def filter_map_by_depth_prob_to_gdf(
     pred_map: np.ndarray,
     prob_map: np.ndarray,
@@ -126,26 +232,39 @@ def filter_map_by_depth_prob_to_gdf(
     depth_thr: float,
     sigma: float = 9,
     reference_tiff: str = None,
+    filter_method: str = "fixed",
+    otsu_sample_size: int = 10000,
+    otsu_random_seed: int = 42,
 ) -> gpd.GeoDataFrame:
     """
     Filter prediction map by probability and depth thresholds, then convert to GeoDataFrame.
     
+    Supports two filtering methods:
+    - "fixed": Uses fixed threshold (prob_thr + depth_thr)
+    - "otsu_per_class": Calculates dynamic Otsu thresholds per class
+    
     Parameters
     ----------
     pred_map : np.ndarray
-        Class prediction map
+        Class prediction map (join_class)
     prob_map : np.ndarray
-        Probability map
+        Probability map (join_prob)
     depth_map : np.ndarray
         Depth/distance map
     prob_thr : float
-        Probability threshold
+        Probability threshold (used for "fixed" method or as fallback)
     depth_thr : float
-        Depth threshold
+        Depth threshold (used for "fixed" method or as fallback)
     sigma : float
         Gaussian smoothing sigma
     reference_tiff : str, optional
         Reference TIFF for georeferencing
+    filter_method : str
+        Filtering method: "fixed" or "otsu_per_class"
+    otsu_sample_size : int
+        Random sample size per class for Otsu calculation (only for "otsu_per_class")
+    otsu_random_seed : int
+        Random seed for reproducibility (only for "otsu_per_class")
     
     Returns
     -------
@@ -159,9 +278,48 @@ def filter_map_by_depth_prob_to_gdf(
     depth_gauss = gaussian_filter(depth_map, sigma=sigma)
     prob_gauss = gaussian_filter(prob_map, sigma=sigma)
     
-    # Apply threshold
-    mask = (depth_gauss + prob_gauss) > (depth_thr + prob_thr)
-    pred_map = np.where(mask, pred_map, 0)
+    # Apply filtering based on method
+    if filter_method == "otsu_per_class":
+        # Calculate Otsu thresholds per class
+        thresholds = calculate_otsu_thresholds_per_class(
+            pred_map=pred_map,
+            prob_map=prob_gauss,
+            depth_map=depth_gauss,
+            otsu_sample_size=otsu_sample_size,
+            otsu_random_seed=otsu_random_seed,
+            prob_thr=prob_thr,
+            depth_thr=depth_thr,
+        )
+        
+        if len(thresholds) == 0:
+            logger.warning("No thresholds calculated, returning empty GeoDataFrame")
+            # Return empty GeoDataFrame
+            transform = None
+            crs = None
+            if reference_tiff and exists(reference_tiff):
+                meta = get_image_metadata(reference_tiff)
+                transform = meta.get('transform')
+                crs = meta.get('crs')
+            return gpd.GeoDataFrame(columns=['geometry', 'tree_type', 'area'], crs=crs)
+        
+        # Create combined map
+        combined_map = prob_gauss + depth_gauss
+        
+        # Apply thresholds per class
+        final_mask = np.zeros_like(pred_map, dtype=bool)
+        for class_id, threshold in thresholds.items():
+            class_mask = (pred_map == class_id)
+            final_mask |= class_mask & (combined_map > threshold)
+        
+        # Apply mask
+        pred_map = np.where(final_mask, pred_map, 0)
+        
+    elif filter_method == "fixed":
+        # Original fixed threshold method
+        mask = (depth_gauss + prob_gauss) > (depth_thr + prob_thr)
+        pred_map = np.where(mask, pred_map, 0)
+    else:
+        raise ValueError(f"Unknown filter_method: {filter_method}. Must be 'fixed' or 'otsu_per_class'")
     
     # Convert to GeoDataFrame
     transform = None
@@ -296,12 +454,28 @@ def get_new_segmentation_sample_vector(
     new_pred_map = new_pred_map.copy()
     new_pred_map += 1
     
-    logger.info(f"Filtering components with depth+prob >= {depth_thr+prob_thr}")
+    # Helper to get args value (supports dict or object)
+    def _get_arg(key, default=None):
+        if hasattr(args, 'get'):
+            return args.get(key, default)
+        return getattr(args, key, default)
+    
+    filter_method = _get_arg('filter_method', 'fixed')
+    otsu_sample_size = _get_arg('otsu_sample_size', 10000)
+    otsu_random_seed = _get_arg('otsu_random_seed', 42)
+    
+    if filter_method == "fixed":
+        logger.info(f"Filtering components with depth+prob >= {depth_thr+prob_thr}")
+    else:
+        logger.info(f"Filtering components using Otsu thresholds per class (method: {filter_method})")
     
     # Filter and convert to GeoDataFrame
     new_pred_gdf = filter_map_by_depth_prob_to_gdf(
         new_pred_map, new_prob_map, new_depth_map,
-        prob_thr, depth_thr, sigma, reference_tiff
+        prob_thr, depth_thr, sigma, reference_tiff,
+        filter_method=filter_method,
+        otsu_sample_size=otsu_sample_size,
+        otsu_random_seed=otsu_random_seed,
     )
     
     logger.info(f"After threshold filter: {len(new_pred_gdf)} components")
@@ -388,6 +562,13 @@ def get_new_segmentation_sample_vector(
     logger.info("Creating all labels set")
     all_labels_gdf = join_labels_vector(unbalanced_delta_gdf, old_selected_updated_gdf, overlap_limit=0.10)
     all_labels_gdf = join_labels_vector(ground_truth_gdf, all_labels_gdf, overlap_limit=0.01)
+    
+    # Apply mask filter to final sets to ensure no component touches area outside study area
+    if mask_path and exists(mask_path):
+        logger.info("Filtering final sets by mask to ensure all components are within study area")
+        selected_labels_gdf = filter_by_mask_vector(selected_labels_gdf, mask_path, max_outside_ratio=0.0)
+        all_labels_gdf = filter_by_mask_vector(all_labels_gdf, mask_path, max_outside_ratio=0.0)
+        logger.info(f"After final mask filter: {len(all_labels_gdf)} all labels, {len(selected_labels_gdf)} selected labels")
     
     logger.info(f"Final: {len(all_labels_gdf)} all labels, {len(selected_labels_gdf)} selected labels")
     
