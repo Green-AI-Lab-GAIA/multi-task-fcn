@@ -110,25 +110,15 @@ class DatasetFromCoord(Dataset):
         normalize(self.image)
 
     def _resize_tensor(self, tensor: torch.Tensor, target_size: int, mode: str = 'bilinear') -> torch.Tensor:
-        """Resize a tensor to target_size.
+        """Resize a tensor to target_size with better downsampling defaults.
         
-        Parameters
-        ----------
-        tensor : torch.Tensor
-            Input tensor of shape (C, H, W) or (H, W)
-        target_size : int
-            Target size for height and width
-        mode : str
-            Interpolation mode ('bilinear' for images, 'nearest' for labels)
-        
-        Returns
-        -------
-        torch.Tensor
-            Resized tensor
+        Supports PyTorch interpolation modes: 'nearest', 'bilinear', 'bicubic', 'area'.
         """
         if tensor.shape[-1] == target_size and tensor.shape[-2] == target_size:
             return tensor
-        
+
+        orig_h, orig_w = tensor.shape[-2:]
+
         # Add batch dimension if needed
         if tensor.dim() == 2:
             tensor = tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
@@ -138,21 +128,35 @@ class DatasetFromCoord(Dataset):
             squeeze_dims = 1
         else:
             squeeze_dims = 0
-        
-        # Resize
-        resized = F.interpolate(
-            tensor.float(),
-            size=(target_size, target_size),
-            mode=mode,
-            align_corners=False if mode != 'nearest' else None
-        )
-        
+
+        # Configure interpolation parameters based on mode
+        interpolate_kwargs = {
+            "input": tensor.float(),
+            "size": (target_size, target_size),
+            "mode": mode,
+        }
+
+        # Set align_corners parameter
+        if mode in ('bilinear', 'bicubic'):
+            interpolate_kwargs["align_corners"] = False
+        elif mode in ('nearest', 'area'):
+            # These modes don't use align_corners
+            pass
+
+        # Set antialias parameter (only for downsampling with bilinear/bicubic modes)
+        # Note: antialias is only supported for 'bilinear' and 'bicubic' modes
+        if mode not in ('nearest', 'area') and (orig_h > target_size or orig_w > target_size):
+            if mode in ('bilinear', 'bicubic'):
+                interpolate_kwargs["antialias"] = True
+
+        resized = F.interpolate(**interpolate_kwargs)
+
         # Remove added dimensions
         if squeeze_dims == 2:
             resized = resized.squeeze(0).squeeze(0)
         elif squeeze_dims == 1:
             resized = resized.squeeze(0)
-        
+
         return resized
 
     def read_window_around_coord(self, coord:np.ndarray, image:np.ndarray, crop_size: Optional[int] = None) -> torch.Tensor:
@@ -275,8 +279,21 @@ class DatasetFromCoord(Dataset):
 
         # Resize to input_dimension (always needed for multi-scale, or when crop_size != input_dimension)
         if current_crop_size != self.input_dimension:
-            image = self._resize_tensor(image, self.input_dimension, mode='bilinear')
-            distance_map = self._resize_tensor(distance_map, self.input_dimension, mode='bilinear')
+            # Choose random interpolation method during training augmentation
+            if self.augment:
+                # Available interpolation modes for 2D images
+                # Note: PyTorch F.interpolate doesn't support 'lanczos' for 2D
+                interpolation_modes = ['nearest', 'bilinear', 'bicubic', 'area']
+                image_mode = np.random.choice(interpolation_modes)
+                distance_map_mode = np.random.choice(interpolation_modes)
+            else:
+                # Use bilinear as default for validation/inference
+                image_mode = 'bilinear'
+                distance_map_mode = 'bilinear'
+            
+            image = self._resize_tensor(image, self.input_dimension, mode=image_mode)
+            distance_map = self._resize_tensor(distance_map, self.input_dimension, mode=distance_map_mode)
+            # Segmentation always uses nearest to preserve discrete label values
             segmentation = self._resize_tensor(segmentation, self.input_dimension, mode='nearest')
 
         return image.float(), distance_map.float(), segmentation.long()          
@@ -624,9 +641,14 @@ class MultiRegionDatasetFromCoord(Dataset):
             normalize(self.images[i])
 
     def _resize_tensor(self, tensor: torch.Tensor, target_size: int, mode: str = 'bilinear') -> torch.Tensor:
-        """Resize a tensor to target_size."""
+        """Resize a tensor to target_size.
+        
+        Supports PyTorch interpolation modes: 'nearest', 'bilinear', 'bicubic', 'area'.
+        """
         if tensor.shape[-1] == target_size and tensor.shape[-2] == target_size:
             return tensor
+        
+        orig_h, orig_w = tensor.shape[-2:]
         
         if tensor.dim() == 2:
             tensor = tensor.unsqueeze(0).unsqueeze(0)
@@ -637,12 +659,27 @@ class MultiRegionDatasetFromCoord(Dataset):
         else:
             squeeze_dims = 0
         
-        resized = F.interpolate(
-            tensor.float(),
-            size=(target_size, target_size),
-            mode=mode,
-            align_corners=False if mode != 'nearest' else None
-        )
+        # Configure interpolation parameters based on mode
+        interpolate_kwargs = {
+            "input": tensor.float(),
+            "size": (target_size, target_size),
+            "mode": mode,
+        }
+
+        # Set align_corners parameter
+        if mode in ('bilinear', 'bicubic'):
+            interpolate_kwargs["align_corners"] = False
+        elif mode in ('nearest', 'area'):
+            # These modes don't use align_corners
+            pass
+
+        # Set antialias parameter (only for downsampling with bilinear/bicubic modes)
+        # Note: antialias is only supported for 'bilinear' and 'bicubic' modes
+        if mode not in ('nearest', 'area') and (orig_h > target_size or orig_w > target_size):
+            if mode in ('bilinear', 'bicubic'):
+                interpolate_kwargs["antialias"] = True
+        
+        resized = F.interpolate(**interpolate_kwargs)
         
         if squeeze_dims == 2:
             resized = resized.squeeze(0).squeeze(0)
@@ -729,8 +766,20 @@ class MultiRegionDatasetFromCoord(Dataset):
         
         # Resize to input_dimension (always needed for multi-scale, or when crop_size != input_dimension)
         if current_crop_size != self.input_dimension:
-            image = self._resize_tensor(image, self.input_dimension, mode='bilinear')
-            distance_map = self._resize_tensor(distance_map, self.input_dimension, mode='bilinear')
+            # Choose random interpolation method during training augmentation
+            if self.augment:
+                # Available interpolation modes for 2D images
+                interpolation_modes = ['nearest', 'bilinear', 'bicubic', 'area']
+                image_mode = np.random.choice(interpolation_modes)
+                distance_map_mode = np.random.choice(interpolation_modes)
+            else:
+                # Use bilinear as default for validation/inference
+                image_mode = 'bilinear'
+                distance_map_mode = 'bilinear'
+            
+            image = self._resize_tensor(image, self.input_dimension, mode=image_mode)
+            distance_map = self._resize_tensor(distance_map, self.input_dimension, mode=distance_map_mode)
+            # Segmentation always uses nearest to preserve discrete label values
             segmentation = self._resize_tensor(segmentation, self.input_dimension, mode='nearest')
         
         return image.float(), distance_map.float(), segmentation.long()
