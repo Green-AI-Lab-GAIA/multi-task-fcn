@@ -11,6 +11,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
@@ -57,6 +58,7 @@ from src.vector_operations import (
     load_labels_from_geopackage,
     save_labels_as_geopackage,
     select_n_labels_by_class_vector,
+    select_n_labels_by_feature_distance,
 )
 from visualization import generate_labels_view
 
@@ -534,7 +536,7 @@ def train_epochs(last_checkpoint:str,
                                  lambda_weight=lambda_weight)
         
         logger.info("Evaluating the model...")
-        f1_avg, f1_by_class_avg = eval(val_loader, model)
+        f1_avg, f1_by_class_avg = eval(val_loader, model, args.nb_class)
         
         ### Save training stats ####
         eval_data = {f"f1_class_{num+1}": f1_score for num, f1_score in enumerate(f1_by_class_avg)}
@@ -675,11 +677,12 @@ def train_iteration(current_iter_folder: str, args: dict):
         )
         
         # Validation uses fixed crop size (eval_crop_size), no multi-scale
+        # Use same number of samples as training
         val_dataset = MultiRegionDatasetFromCoord(
             image_paths=args.ortho_images,
             segmentation_paths=val_segmentation_paths,
             distance_map_paths=val_distance_map_paths,
-            samples=args.samples // 3,
+            samples=args.samples,  # Same as training
             augment=False,
             crop_size=eval_crop_size,
             input_dimension=input_dimension,
@@ -710,11 +713,12 @@ def train_iteration(current_iter_folder: str, args: dict):
         )
         
         # Validation uses fixed crop size (eval_crop_size), no multi-scale
+        # Use same number of samples as training
         val_dataset = DatasetFromCoord(
             image_path=args.ortho_images[0],
             segmentation_path=val_segmentation_paths[0],
             distance_map_path=val_distance_map_paths[0],
-            samples=args.samples // 3,
+            samples=args.samples,  # Same as training
             augment=False,
             crop_size=eval_crop_size,
             input_dimension=input_dimension,
@@ -932,6 +936,80 @@ def load_old_labels_all_regions(current_iter_folder: str, args: dict) -> gpd.Geo
     return gpd.GeoDataFrame(columns=['geometry', 'tree_type', 'area', 'region_idx'])
 
 
+def load_selected_labels_all_regions(current_iter_folder: str, args: dict) -> gpd.GeoDataFrame:
+    """
+    Load selected labels (used for training) from all regions and concatenate.
+    
+    This loads the samples that were actually used to train the current iteration's model.
+    For iter_001, uses train_segmentation_paths. For later iterations, uses 
+    selected_labels_set from the previous iteration.
+    
+    Parameters
+    ----------
+    current_iter_folder : str
+        Current iteration folder
+    args : dict
+        Arguments dictionary
+    
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Concatenated GeoDataFrame with selected training labels from all regions
+    """
+    from src.vector_operations import labels_to_geodataframe_with_stats
+    
+    num_regions = getattr(args, 'num_regions', 1)
+    current_iter = int(current_iter_folder.split("iter_")[-1])
+    
+    all_labels_gdfs = []
+    
+    for region_idx in range(num_regions):
+        train_seg_path = args.train_segmentation_paths[region_idx]
+        
+        # Determine selected labels path
+        if current_iter == 1:
+            # For first iteration, use initial training data
+            SELECTED_LABELS_FILE = train_seg_path
+        else:
+            # For later iterations, use selected_labels_set from previous iteration
+            if num_regions > 1:
+                prev_region_folder = join(args.data_path, f"iter_{current_iter-1:03d}", f"region_{region_idx}")
+            else:
+                prev_region_folder = join(args.data_path, f"iter_{current_iter-1:03d}")
+            
+            selected_gpkg = join(prev_region_folder, "new_labels", 'selected_labels_set.gpkg')
+            selected_tiff = join(prev_region_folder, "new_labels", 'selected_labels_set.tif')
+            
+            SELECTED_LABELS_FILE = selected_gpkg if exists(selected_gpkg) else selected_tiff
+        
+        # Load labels
+        reference_tiff = train_seg_path
+        
+        if SELECTED_LABELS_FILE.endswith('.gpkg'):
+            selected_gdf = gpd.read_file(SELECTED_LABELS_FILE)
+        else:
+            selected_labels = read_tiff(SELECTED_LABELS_FILE)
+            meta = get_image_metadata(reference_tiff)
+            transform = meta.get('transform')
+            crs = meta.get('crs')
+            selected_gdf = labels_to_geodataframe_with_stats(selected_labels, transform, crs)
+        
+        # Handle 'label' column (from train_segmentation_paths) - rename to 'tree_type'
+        if 'label' in selected_gdf.columns and 'tree_type' not in selected_gdf.columns:
+            selected_gdf['tree_type'] = selected_gdf['label']
+        
+        # Add region index
+        selected_gdf['region_idx'] = region_idx
+        all_labels_gdfs.append(selected_gdf)
+    
+    # Concatenate all regions
+    if all_labels_gdfs:
+        combined_gdf = pd.concat(all_labels_gdfs, ignore_index=True)
+        return gpd.GeoDataFrame(combined_gdf, crs=all_labels_gdfs[0].crs if all_labels_gdfs[0].crs else None)
+    
+    return gpd.GeoDataFrame(columns=['geometry', 'tree_type', 'area', 'region_idx'])
+
+
 def generate_labels_for_next_iteration(current_iter_folder: str, args: dict):
     """
     Generate labels and distance map for the next iteration for all regions.
@@ -1019,9 +1097,75 @@ def generate_labels_for_next_iteration(current_iter_folder: str, args: dict):
         
         logger.info(f"Total delta components across all regions: {len(global_delta)}")
         
-        # Select 5 samples per tree_type globally
-        selected_delta = select_n_labels_by_class_vector(global_delta, samples_by_class=5)
-        logger.info(f"Selected {len(selected_delta)} samples globally (5 per tree_type)")
+        # Load model for feature extraction
+        logger.info("Loading model for feature-based selection...")
+        current_model_folder = join(current_iter_folder, args.model_dir)
+        checkpoint_path = join(current_model_folder, args.checkpoint_file)
+        
+        # Get image metadata to determine number of channels
+        sample_ortho_metadata = get_image_metadata(args.ortho_images[0])
+        in_channels = sample_ortho_metadata['count']
+        
+        # Build and load model
+        model = build_model(
+            in_channels=in_channels,
+            num_classes=args.nb_class,
+            arch=args.arch,
+            pretrained=False,
+            psize=getattr(args, 'input_dimension', args.size_crops),
+            dropout_rate=args.dropout_rate,
+            batch_norm=args.batch_norm,
+        )
+        model = load_weights(model, checkpoint_path)
+        device = get_device()
+        model = model.to(device)
+        model.eval()
+        
+        # Load training samples (selected labels used to train current model)
+        logger.info("Loading training samples for feature comparison...")
+        train_gdf = load_selected_labels_all_regions(current_iter_folder, args)
+        
+        # Prepare ortho_info_list
+        logger.info("Preparing orthoimage metadata...")
+        ortho_info_list = []
+        for region_idx, ortho_path in enumerate(args.ortho_images):
+            with rasterio.open(ortho_path) as src:
+                ortho_info_list.append({
+                    'region_idx': region_idx,
+                    'path': ortho_path,
+                    'bounds': src.bounds,
+                    'crs': src.crs,
+                    'transform': src.transform,
+                    'width': src.width,
+                    'height': src.height,
+                })
+        
+        # Select 5 samples per tree_type globally based on feature distance
+        distance_method = getattr(args, 'distance_aggregation_method', 'mean')
+        logger.info(f"Selecting samples based on feature distance (aggregation method: {distance_method})...")
+        try:
+            selected_delta = select_n_labels_by_feature_distance(
+                gdf=global_delta,
+                model=model,
+                train_gdf=train_gdf,
+                ortho_info_list=ortho_info_list,
+                args=args,
+                samples_by_class=5,
+                crop_size=args.size_crops,
+                input_dimension=getattr(args, 'input_dimension', args.size_crops),
+                device=device,
+                distance_aggregation_method=distance_method,
+            )
+            logger.info(f"Selected {len(selected_delta)} samples globally (5 per tree_type) based on feature distance")
+        except Exception as e:
+            logger.warning(f"Feature-based selection failed: {e}. Falling back to random selection.")
+            selected_delta = select_n_labels_by_class_vector(global_delta, samples_by_class=5)
+            logger.info(f"Selected {len(selected_delta)} samples globally (5 per tree_type) using random selection")
+        
+        # Clean up model
+        del model
+        torch.cuda.empty_cache()
+        gc.collect()
     else:
         selected_delta = gpd.GeoDataFrame(columns=['geometry', 'tree_type', 'region_idx'])
     
@@ -1151,11 +1295,23 @@ def process_region_for_global_selection(
     new_pred_map = new_pred_map.copy()
     new_pred_map += 1
     
+    # Get filter method parameters
+    filter_method = getattr(args, 'filter_method', 'fixed')
+    otsu_sample_size = getattr(args, 'otsu_sample_size', 10000)
+    otsu_random_seed = getattr(args, 'otsu_random_seed', 42)
+    
     # Filter and convert to GeoDataFrame
-    logger.info(f"Region {region_idx}: Filtering components with depth+prob >= {args.depth_thr + args.prob_thr}")
+    if filter_method == "fixed":
+        logger.info(f"Region {region_idx}: Filtering components with depth+prob >= {args.depth_thr + args.prob_thr}")
+    else:
+        logger.info(f"Region {region_idx}: Filtering components using Otsu thresholds per class (method: {filter_method})")
+    
     new_pred_gdf = filter_map_by_depth_prob_to_gdf(
         new_pred_map, new_prob_map, new_depth_map,
-        args.prob_thr, args.depth_thr, args.sigma, reference_tiff
+        args.prob_thr, args.depth_thr, args.sigma, reference_tiff,
+        filter_method=filter_method,
+        otsu_sample_size=otsu_sample_size,
+        otsu_random_seed=otsu_random_seed,
     )
     logger.info(f"Region {region_idx}: After threshold filter: {len(new_pred_gdf)} components")
     
@@ -1281,6 +1437,22 @@ def save_region_labels_from_global_selection(
     logger.info(f"Region {region_idx}: Creating all labels set")
     all_labels_gdf = join_labels_vector(region_unbalanced_delta, old_selected_updated_gdf, overlap_limit=0.10)
     all_labels_gdf = join_labels_vector(ground_truth_gdf, all_labels_gdf, overlap_limit=0.01)
+    
+    # Apply mask filter to final sets to ensure no component touches area outside study area
+    def _get_arg(key, default=None):
+        if hasattr(args, 'get'):
+            return args.get(key, default)
+        return getattr(args, key, default)
+    
+    data_path = _get_arg('data_path', '.')
+    mask_path = get_or_generate_mask_path(args, region_idx, data_path)
+    
+    if mask_path and exists(mask_path):
+        logger.info(f"Region {region_idx}: Filtering final sets by mask to ensure all components are within study area")
+        from src.vector_operations import filter_by_mask_vector
+        selected_labels_gdf = filter_by_mask_vector(selected_labels_gdf, mask_path, max_outside_ratio=0.0)
+        all_labels_gdf = filter_by_mask_vector(all_labels_gdf, mask_path, max_outside_ratio=0.0)
+        logger.info(f"Region {region_idx}: After final mask filter: {len(all_labels_gdf)} all labels, {len(selected_labels_gdf)} selected labels")
     
     logger.info(f"Region {region_idx}: Final: {len(all_labels_gdf)} all labels, {len(selected_labels_gdf)} selected labels")
     
