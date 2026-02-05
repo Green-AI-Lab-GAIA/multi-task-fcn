@@ -71,9 +71,13 @@ def evaluate_metrics(pred:Union[np.ndarray, torch.Tensor], gt:Union[np.ndarray, 
 
     pred_in_test = np.where(np.isin(comp_pred, comp_pred_in_test), pred+1, 0)
 
+    list_of_labels = list(range(1, num_class + 1) )
+    
     iou_score = jaccard_score(gt.flatten(),
                               pred_in_test.flatten(),
-                              average = "macro")
+                              average = "macro",
+                              labels=list_of_labels,
+                              )
 
   
     accu_criteria["avgIOU"] = float(iou_score)*100
@@ -87,7 +91,6 @@ def evaluate_metrics(pred:Union[np.ndarray, torch.Tensor], gt:Union[np.ndarray, 
     accuracy = accuracy_score(gt, pred)*100
     accu_criteria["Accuracy"] = float(np.round(accuracy,2))
     
-    list_of_labels = list(range(1, num_class + 1) )
 
     accu_criteria["avgF1"] = float(f1_score(gt, pred, average="macro", zero_division=True, labels =  list_of_labels))*100
     accu_criteria["avgPre"] = float(precision_score(gt, pred, average="macro", zero_division=True, labels = list_of_labels))*100

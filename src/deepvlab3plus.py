@@ -290,14 +290,17 @@ class DeepLabv3_plus(nn.Module):
         assert model_depth in [10, 18, 34]
     
         if model_depth == 10:
-            self.resnet_features_1 = ResNet(BasicBlock, [1, 1, 1, 1], 
-                                          seq=self.num_ch_1)
+            self.resnet_features_1 = ResNet(BasicBlock, 
+                                            [1, 1, 1, 1], 
+                                            seq=self.num_ch_1)
         elif model_depth == 18:
-            self.resnet_features_1 = ResNet(BasicBlock, [2, 2, 2, 2], 
-                                          seq=self.num_ch_1)
+            self.resnet_features_1 = ResNet(BasicBlock, 
+                                            [2, 2, 2, 2], 
+                                            seq=self.num_ch_1)
         elif model_depth == 34:
-            self.resnet_features_1 = ResNet(BasicBlock, [3, 4, 6, 3], 
-                                          seq=self.num_ch_1)
+            self.resnet_features_1 = ResNet(BasicBlock, 
+                                            [3, 4, 6, 3], 
+                                            seq=self.num_ch_1)
             
 
         # ASPP

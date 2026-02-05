@@ -127,7 +127,7 @@ def format_axis(axis, which='both', fmt = "{:.2f}"):
 
 
 
-def autolabel(axis:Union[np.ndarray,plt.Axes], fmt = "{:.2f}"):
+def autolabel(axis:Union[np.ndarray,plt.Axes], fmt = "{:.2f}", fontsize = 9):
     """Adiciona textos sobre cada barra em um gráfico de barras
 
     Parameters
@@ -143,7 +143,7 @@ def autolabel(axis:Union[np.ndarray,plt.Axes], fmt = "{:.2f}"):
     
     for ax in axis.flatten():
         for container in ax.containers:
-            ax.bar_label(container, fmt = fmt, fontsize = 9)
+            ax.bar_label(container, fmt = fmt, fontsize = fontsize)
 
 
 

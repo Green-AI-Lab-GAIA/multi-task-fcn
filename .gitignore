@@ -15,3 +15,10 @@ packages/
 Original Data Source
 *.log
 debug_folder
+*.ppk
+wandb
+results/
+.venv/
+*.zip
+*.pem
+*.out
