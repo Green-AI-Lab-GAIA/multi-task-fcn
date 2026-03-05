@@ -119,7 +119,7 @@ eval_crop_size: 1024
 nb_class: 17
 
 # samples per epoch
-overlap: [0.1, 0.3, 0.5]
+overlap: [0.3, 0.5]
 
 ################################
 ## Active Learning parameters ##

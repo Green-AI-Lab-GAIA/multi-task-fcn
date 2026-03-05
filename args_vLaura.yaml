@@ -126,7 +126,7 @@ eval_crop_size: 1024
 # Classes 1 - 4
 nb_class: 4
 # samples per epoch
-overlap: [0.1,0.3, 0.5]
+overlap: [0.3, 0.5]
 
 
 ################################
