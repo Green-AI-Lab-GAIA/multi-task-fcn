@@ -274,13 +274,17 @@ def evaluate_overlap(prediction_path: str,
 
     test_dataset.standardize_image_channels()
 
+    # Use a potentially smaller batch size for evaluation to avoid CUDA OOM.
+    # Falls back to training batch_size if eval_batch_size is not defined.
+    eval_batch_size = getattr(args, "eval_batch_size", args.batch_size)
+
     test_loader = torch.utils.data.DataLoader(
-            test_dataset,
-            batch_size=args.batch_size*4,
-            num_workers=args.workers,
-            pin_memory=True,
-            drop_last=False,
-            shuffle=False,
+        test_dataset,
+        batch_size=eval_batch_size,
+        num_workers=args.workers,
+        pin_memory=True,
+        drop_last=False,
+        shuffle=False,
     )
 
     logger.info("Building data done with {} patches loaded.".format(test_dataset.coords.shape[0]))
