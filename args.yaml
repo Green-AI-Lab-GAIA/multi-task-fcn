@@ -5,9 +5,9 @@
 model_dir: exp_deeplabv3_resnet50
 checkpoint_file: checkpoint.pth.tar
 
-data_path: "bioflore_data/v02"
+data_path: "bioflore_data/v06"
 
-note: "Multi-region pipeline com 3 BigPlots (03, 07, 11) do dataset Matemática na Indústria"
+note: "Multi-region pipeline com 3 BigPlots (03, 07, 11) do dataset Matemática na Indústria. Memsm"
 
 # Input data for the model
 
@@ -33,10 +33,10 @@ full_segmentation_paths:
   - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_07.tif"
   - "bioflore_data/input_data/segmentations/train/Mosaic_BigPlot_11.tif"
 
-# mask_paths: (optional, uncomment if you have mask files)
-#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_03.tif"
-#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_07.tif"
-#   - "bioflore_data/input_data/masks/Mosaic_BigPlot_11.tif"
+mask_paths:
+  - "/home/luizluz/Documentos/multi-task-fcn/bioflore_data/v04/generated_masks/Mosaic_BigPlot_03_mask.tif"
+  - "/home/luizluz/Documentos/multi-task-fcn/bioflore_data/v04/generated_masks/Mosaic_BigPlot_07_mask.tif"
+  - "/home/luizluz/Documentos/multi-task-fcn/bioflore_data/v04/generated_masks/Mosaic_BigPlot_11_mask.tif"
 
 # You can use the 'test', 'train' or 'full' set as validation set
 validation_set: "train"
@@ -80,12 +80,18 @@ start_warmup: 0.0
 # weight decay
 weight_decay: 1e-06
 
+# Early stopping patience (number of epochs without improvement before stopping)
+patience: 5
+
+# Early stopping threshold (minimum improvement in F1 score to consider as improvement)
+# The model is considered improved if: (new_f1 - best_f1) > early_stopping_threshold
+early_stopping_threshold: 0.01
 
 ### others parameters ###
 # number of data loading workers
 # NOTE: Reduced from 16 to 4 to prevent OOM (Out of Memory) errors
 # Each worker loads data independently, consuming significant RAM with large geotiffs
-workers: 4
+workers: 8
 # random seed
 seed: 3115
 
@@ -129,8 +135,15 @@ prob_thr: 0.7
 depth_thr: 0.5
 # 0.7+0.5 = 1.2 filter
 
+# Filter method: "fixed" (uses prob_thr + depth_thr) or "otsu_per_class" (dynamic Otsu thresholds per class)
+filter_method: "otsu_per_class"  # Options: "fixed", "otsu_per_class"
+
+# Parameters for Otsu method (only used if filter_method == "otsu_per_class")
+otsu_sample_size: 10000  # Random sample size per class for Otsu threshold calculation
+otsu_random_seed: 42  # Random seed for reproducibility
+
 # Num of iter
-num_iter : 20
+num_iter : 6
 
 # Area filter thresholds in square meters (m²)
 # The pipeline automatically handles CRS conversion (works with UTM, WGS84, etc.)
@@ -146,3 +159,9 @@ scale_area: None
 
 # Sigma value for gaussian filter in distance map
 sigma : 30
+
+# Distance aggregation method: "mean" or "min"
+# "mean": calculates mean distance to all training samples of same species
+# "min": calculates minimum distance to training samples of same species
+# Samples with highest distance (mean or min) are selected
+distance_aggregation_method: "min"

@@ -6,7 +6,7 @@ model_dir: exp_vDeepLabv3_resnet50_vanilla_amazon
 checkpoint_file: checkpoint.pth.tar
 
 # Root folder where iterations/outputs will be created
-data_path: "amazon_data/vDeepLabv3Vanilla_resnet50"
+data_path: "amazon_data/vDeepLabv3Vanilla_resnet50_v2"
 
 note: "DeepLabv3_resnet50 Vanilla (lambda_weight=0) rodando no amazon_data"
 

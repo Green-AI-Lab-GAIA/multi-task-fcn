@@ -6,7 +6,7 @@ model_dir: exp_vLaura_deeplabv3plus_resnet9_amazon
 checkpoint_file: checkpoint.pth.tar
 
 # Root folder where iterations/outputs will be created
-data_path: "amazon_data/vLaura_deeplabv3plus_resnet9"
+data_path: "amazon_data/vLaura_deeplabv3plus_resnet9_v2"
 
 note: "Experimento vLaura - DeepLabv3+_resnet9 com dropout 0.65 rodando no amazon_data"
 
@@ -37,7 +37,7 @@ validation_set: "train"
 ###### TRAINING parameters ######
 downsampling_factor: None
 # num samples per epoch
-samples: 5000
+samples: 140000
 # True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
@@ -60,7 +60,7 @@ epochs: 100
 batch_size: 128
 
 # base learning rate
-base_lr: 0.01
+base_lr: 0.1
 # final learning rate
 final_lr: 0.0001
 # number of warmup epochs
@@ -70,6 +70,16 @@ start_warmup: 0.0
 
 # weight decay
 weight_decay: 1e-06
+
+# Early stopping patience: number of epochs without improvement before stopping
+patience: 5
+
+# Learning rate schedule: "cosine_warmup" or "step_decay"
+# "step_decay" multiplies lr by step_decay_rate every step_decay_every epochs
+# (inverse time decay as in Cué La Rosa et al., 2021)
+lr_schedule_type: step_decay
+step_decay_rate: 0.1
+step_decay_every: 5
 
 ### others parameters ###
 # number of data loading workers

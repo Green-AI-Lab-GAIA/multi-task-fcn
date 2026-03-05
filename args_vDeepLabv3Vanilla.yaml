@@ -5,7 +5,7 @@
 model_dir: bioflore_data/vDeepLabv3Vanilla
 checkpoint_file: checkpoint.pth.tar
 
-data_path: "bioflore_data/vDeepLabv3Vanilla"
+data_path: "bioflore_data/vDeepLabv3Vanilla_v2"
 
 note: "DeepLabv3_resnet50 Vanilla - Sem task auxiliar (lambda_weight=0), pesos pré-treinados, 1 iteração"
 
