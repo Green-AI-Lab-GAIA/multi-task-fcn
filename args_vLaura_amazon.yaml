@@ -2,13 +2,13 @@
 ### FILE PATHS ###
 ##################
 # experiment directory (saved inside each iter folder)
-model_dir: exp_vLaura_deeplabv3plus_resnet9_amazon
+model_dir: exp_vLaura_deeplabvlaura_amazon
 checkpoint_file: checkpoint.pth.tar
 
 # Root folder where iterations/outputs will be created
-data_path: "amazon_data/vLaura_deeplabv3plus_resnet9_v2"
+data_path: "amazon_data/vLaura_deeplabvlaura_v2"
 
-note: "Experimento vLaura - DeepLabv3+_resnet9 com dropout 0.65 rodando no amazon_data"
+note: "Experimento vLaura - DeepLabVLaura (arquitetura fiel ao paper) com dropout 0.65 rodando no amazon_data"
 
 # Input data for the model
 
@@ -37,13 +37,13 @@ validation_set: "train"
 ###### TRAINING parameters ######
 downsampling_factor: None
 # num samples per epoch
-samples: 140000
+samples: 5000
 # True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
-# convnet architecture --> IMPORTANTE: usando deeplabv3+_resnet9
-arch: deeplabv3+_resnet9
-# True for load pretrained weights from Imagenet (não aplicável para resnet9)
+# convnet architecture --> DeepLabVLaura: implementação fiel ao paper (Cué La Rosa et al., 2021)
+arch: deeplabvlaura
+# True for load pretrained weights from Imagenet (não aplicável para esta arquitetura)
 is_pretrained: False
 batch_norm: true
 # Dropout rate for deepvlab classification training
@@ -56,8 +56,14 @@ lambda_weight: 1
 # number of total epochs to run
 epochs: 100
 # batch size per gpu, i.e. how many unique instances per gpu
+# GPU 16GB: batch_size 16-32 for input_dimension 256
+# GPU 16GB: batch_size 4-8 for input_dimension 512
 # NOTA: Com input_dimension 128, pode aumentar o batch_size
-batch_size: 128
+batch_size: 32
+
+# Evaluation batch size (se não especificado, cai para batch_size acima)
+# Manter menor na avaliação evita estouro de memória (CUDA OOM)
+eval_batch_size: 64
 
 # base learning rate
 base_lr: 0.1
@@ -94,9 +100,8 @@ seed: 3115
 # Size of crops extracted from the image (can be large, e.g., 1024)
 size_crops: 1024
 
-# Size of the input to the model (fixed, e.g., 128)
-# IMPORTANTE: DeepLabv3Plus_resnet9 REQUER input_dimension = 128
-input_dimension: 128
+# Size of the input to the model (must be divisible by 4)
+input_dimension: 256
 
 ###############################
 #### Multi-scale crop settings ####
