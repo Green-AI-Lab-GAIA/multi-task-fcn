@@ -18,6 +18,7 @@ sys.path.append(ROOT_PATH)
 from src.deepvlab3 import DeepLabv3
 from src.deepvlab3plus import DeepLabv3_plus
 from src.deepvlab3plus_resnet9 import DeepLabv3Plus_resnet9
+from src.deeplabvlaura import DeepLabVLaura
 from src.deeplabv3plus_smp import DeepLabV3Plus_SMP
 from src.metrics import evaluate_f1, evaluate_metrics
 from src.utils import (AverageMeter, check_folder, get_device, plot_figures)
@@ -30,7 +31,7 @@ logger = getLogger("__main__")
 
 def build_model(in_channels:list, 
                 num_classes:int, 
-                arch:Literal["deeplabv3_resnet50","deeplabv3_resnet101","deeplabv3+_resnet34","deeplabv3+_resnet18","deeplabv3+_resnet10", "deeplabv3+_resnet9"], 
+                arch:Literal["deeplabv3_resnet50","deeplabv3_resnet101","deeplabv3+_resnet34","deeplabv3+_resnet18","deeplabv3+_resnet10", "deeplabv3+_resnet9", "deeplabvlaura"], 
                 pretrained:bool, 
                 psize:int,
                 dropout_rate:float,
@@ -60,6 +61,14 @@ def build_model(in_channels:list,
 
     elif arch == "deeplabv3+_resnet9":
         model = DeepLabv3Plus_resnet9(
+            num_ch = in_channels,
+            num_class = num_classes,
+            psize = psize,
+            dropout_rate = dropout_rate
+        )
+
+    elif arch == "deeplabvlaura":
+        model = DeepLabVLaura(
             num_ch = in_channels,
             num_class = num_classes,
             psize = psize,
