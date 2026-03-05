@@ -101,6 +101,7 @@ from src.io_operations import (
     get_image_metadata,
     read_tiff,
 )
+from src.utils import from_255_to_1
 from src.vector_operations import (
     raster_to_geodataframe,
     labels_to_geodataframe_with_stats,
@@ -117,6 +118,205 @@ from src.vector_operations import (
 )
 
 logger = getLogger("__main__")
+
+
+def collect_global_otsu_samples(
+    current_iter_folder: str,
+    args: dict,
+    num_regions: int,
+    otsu_sample_size: int = 10000,
+    otsu_random_seed: int = 42,
+    sigma: float = 9,
+) -> dict:
+    """
+    Collect Otsu samples from all regions for global threshold calculation.
+    
+    Iterates over all regions, loads prediction, probability, and depth maps,
+    and collects random samples per class from each region. Returns a dictionary
+    mapping class_id to a list of samples from all regions.
+    
+    Parameters
+    ----------
+    current_iter_folder : str
+        Current iteration folder path
+    args : dict
+        Arguments dictionary containing paths and parameters
+    num_regions : int
+        Number of regions to process
+    otsu_sample_size : int
+        Size of random sample per class per region for Otsu calculation
+    otsu_random_seed : int
+        Random seed for reproducibility
+    sigma : float
+        Gaussian smoothing sigma for probability and depth maps
+    
+    Returns
+    -------
+    dict
+        Dictionary mapping class_id -> list of combined values (prob + depth)
+        from all regions. Each list contains samples from all regions concatenated.
+    """
+    import gc
+    
+    # Dictionary to store samples per class: {class_id: [samples from all regions]}
+    global_samples = {}
+    
+    # Set random seed for reproducibility
+    np.random.seed(otsu_random_seed)
+    
+    current_iter = int(current_iter_folder.split("iter_")[-1])
+    
+    logger.info(f"Collecting Otsu samples from {num_regions} region(s) for global threshold calculation...")
+    
+    for region_idx in range(num_regions):
+        logger.info(f"Collecting samples from Region {region_idx}...")
+        
+        # Determine region folder
+        if num_regions > 1:
+            region_folder = join(current_iter_folder, f"region_{region_idx}")
+        else:
+            region_folder = current_iter_folder
+        
+        # Get paths for this region
+        raster_pred_folder = join(region_folder, "raster_prediction")
+        
+        # Load model predictions for this region
+        NEW_PRED_FILE = join(raster_pred_folder, f'join_class_{np.sum(args.overlap)}.TIF')
+        NEW_PROB_FILE = join(raster_pred_folder, f'join_prob_{np.sum(args.overlap)}.TIF')
+        NEW_DEPTH_FILE = join(raster_pred_folder, f'depth_{np.sum(args.overlap)}.TIF')
+        
+        if not exists(NEW_PRED_FILE) or not exists(NEW_PROB_FILE) or not exists(NEW_DEPTH_FILE):
+            logger.warning(f"Region {region_idx}: Missing prediction files, skipping...")
+            continue
+        
+        # Load maps
+        pred_map = read_tiff(NEW_PRED_FILE)
+        prob_map = read_tiff(NEW_PROB_FILE)
+        prob_map = from_255_to_1(prob_map)
+        depth_map = read_tiff(NEW_DEPTH_FILE)
+        depth_map = from_255_to_1(depth_map)
+        
+        # Apply Gaussian smoothing
+        prob_gauss = gaussian_filter(prob_map, sigma=sigma)
+        depth_gauss = gaussian_filter(depth_map, sigma=sigma)
+        
+        # Calculate combined map
+        combined_map = prob_gauss + depth_gauss
+        
+        # Get unique classes (excluding background/0)
+        unique_classes = np.unique(pred_map)
+        unique_classes = unique_classes[unique_classes > 0]
+        
+        if len(unique_classes) == 0:
+            logger.warning(f"Region {region_idx}: No classes found (only background)")
+            # Clean up
+            del pred_map, prob_map, depth_map, prob_gauss, depth_gauss, combined_map
+            gc.collect()
+            continue
+        
+        # Collect samples for each class
+        for class_id in unique_classes:
+            # Create mask for this class
+            class_mask = (pred_map == class_id)
+            
+            # Get combined values for this class
+            combined_values = combined_map[class_mask]
+            
+            if len(combined_values) == 0:
+                continue
+            
+            # Sample if needed
+            if len(combined_values) > otsu_sample_size:
+                combined_sample = np.random.choice(combined_values, size=otsu_sample_size, replace=False)
+            else:
+                combined_sample = combined_values.copy()
+            
+            # Add samples to global dictionary
+            if class_id not in global_samples:
+                global_samples[class_id] = []
+            
+            global_samples[class_id].append(combined_sample)
+            logger.debug(f"Region {region_idx}, Class {class_id}: Collected {len(combined_sample)} samples")
+        
+        # Clean up memory
+        del pred_map, prob_map, depth_map, prob_gauss, depth_gauss, combined_map
+        gc.collect()
+    
+    # Concatenate samples from all regions for each class
+    for class_id in global_samples:
+        all_samples = np.concatenate(global_samples[class_id])
+        global_samples[class_id] = all_samples
+        logger.info(f"Class {class_id}: Total samples from all regions: {len(all_samples)}")
+    
+    logger.info(f"Collected samples for {len(global_samples)} class(es)")
+    return global_samples
+
+
+def calculate_global_otsu_thresholds(
+    global_samples: dict,
+    prob_thr: float = None,
+    depth_thr: float = None,
+) -> dict:
+    """
+    Calculate global Otsu thresholds per class from collected samples.
+    
+    Takes samples collected from all regions and calculates a single Otsu threshold
+    per class using all samples combined.
+    
+    Parameters
+    ----------
+    global_samples : dict
+        Dictionary mapping class_id -> array of combined values (prob + depth)
+        from all regions
+    prob_thr : float, optional
+        Fallback probability threshold if class has too few pixels
+    depth_thr : float, optional
+        Fallback depth threshold if class has too few pixels
+    
+    Returns
+    -------
+    dict
+        Dictionary mapping class_id -> threshold value
+    """
+    thresholds = {}
+    
+    # Calculate fallback threshold if provided
+    fallback_threshold = None
+    if prob_thr is not None and depth_thr is not None:
+        fallback_threshold = prob_thr + depth_thr
+    
+    for class_id, combined_values in global_samples.items():
+        if len(combined_values) == 0:
+            logger.warning(f"Class {class_id}: No samples found, skipping")
+            continue
+        
+        # Handle small classes with fallback
+        if len(combined_values) < 100:
+            if fallback_threshold is not None:
+                threshold = fallback_threshold
+                logger.info(f"Class {class_id}: Too few samples ({len(combined_values)}), using fallback threshold: {threshold:.4f}")
+            else:
+                threshold = np.mean(combined_values)
+                logger.info(f"Class {class_id}: Too few samples ({len(combined_values)}), using mean: {threshold:.4f}")
+            thresholds[class_id] = threshold
+            continue
+        
+        # Calculate Otsu threshold
+        try:
+            threshold = threshold_otsu(combined_values)
+            thresholds[class_id] = threshold
+            logger.info(f"Class {class_id}: Global Otsu threshold = {threshold:.4f} (from {len(combined_values)} samples across all regions)")
+        except Exception as e:
+            # Fallback if Otsu fails (e.g., all values are the same)
+            if fallback_threshold is not None:
+                threshold = fallback_threshold
+                logger.warning(f"Class {class_id}: Otsu calculation failed ({e}), using fallback threshold: {threshold:.4f}")
+            else:
+                threshold = np.mean(combined_values)
+                logger.warning(f"Class {class_id}: Otsu calculation failed ({e}), using mean: {threshold:.4f}")
+            thresholds[class_id] = threshold
+    
+    return thresholds
 
 
 def calculate_otsu_thresholds_per_class(
@@ -235,13 +435,14 @@ def filter_map_by_depth_prob_to_gdf(
     filter_method: str = "fixed",
     otsu_sample_size: int = 10000,
     otsu_random_seed: int = 42,
+    global_otsu_thresholds: dict = None,
 ) -> gpd.GeoDataFrame:
     """
     Filter prediction map by probability and depth thresholds, then convert to GeoDataFrame.
     
     Supports two filtering methods:
     - "fixed": Uses fixed threshold (prob_thr + depth_thr)
-    - "otsu_per_class": Calculates dynamic Otsu thresholds per class
+    - "otsu_per_class": Calculates dynamic Otsu thresholds per class (or uses global thresholds if provided)
     
     Parameters
     ----------
@@ -262,9 +463,12 @@ def filter_map_by_depth_prob_to_gdf(
     filter_method : str
         Filtering method: "fixed" or "otsu_per_class"
     otsu_sample_size : int
-        Random sample size per class for Otsu calculation (only for "otsu_per_class")
+        Random sample size per class for Otsu calculation (only for "otsu_per_class" if global_otsu_thresholds not provided)
     otsu_random_seed : int
-        Random seed for reproducibility (only for "otsu_per_class")
+        Random seed for reproducibility (only for "otsu_per_class" if global_otsu_thresholds not provided)
+    global_otsu_thresholds : dict, optional
+        Pre-calculated global Otsu thresholds per class. If provided, these will be used
+        instead of calculating thresholds locally. Dictionary mapping class_id -> threshold value.
     
     Returns
     -------
@@ -280,16 +484,21 @@ def filter_map_by_depth_prob_to_gdf(
     
     # Apply filtering based on method
     if filter_method == "otsu_per_class":
-        # Calculate Otsu thresholds per class
-        thresholds = calculate_otsu_thresholds_per_class(
-            pred_map=pred_map,
-            prob_map=prob_gauss,
-            depth_map=depth_gauss,
-            otsu_sample_size=otsu_sample_size,
-            otsu_random_seed=otsu_random_seed,
-            prob_thr=prob_thr,
-            depth_thr=depth_thr,
-        )
+        # Use global thresholds if provided, otherwise calculate locally
+        if global_otsu_thresholds is not None:
+            thresholds = global_otsu_thresholds
+            logger.debug(f"Using pre-calculated global Otsu thresholds for {len(thresholds)} class(es)")
+        else:
+            # Calculate Otsu thresholds per class locally
+            thresholds = calculate_otsu_thresholds_per_class(
+                pred_map=pred_map,
+                prob_map=prob_gauss,
+                depth_map=depth_gauss,
+                otsu_sample_size=otsu_sample_size,
+                otsu_random_seed=otsu_random_seed,
+                prob_thr=prob_thr,
+                depth_thr=depth_thr,
+            )
         
         if len(thresholds) == 0:
             logger.warning("No thresholds calculated, returning empty GeoDataFrame")

@@ -267,8 +267,8 @@ def labels_to_geodataframe_with_stats(
     
     # Calculate geometric properties from Shapely geometries
     gdf['convex_area'] = gdf.geometry.convex_hull.area
-    gdf['solidity'] = gdf['area'] / gdf['convex_area'].replace(0, np.nan)
-    gdf['solidity'] = gdf['solidity'].fillna(1.0)
+    gdf['solidity'] = gdf['area'] / gdf['convex_area']
+    gdf['solidity'] = gdf['solidity']
     
     # Bounding box properties
     bounds = gdf.geometry.bounds

@@ -414,10 +414,16 @@ def get_learning_rate_schedule(train_loader: torch.utils.data.DataLoader,
                                final_lr:float, 
                                epochs:int, 
                                warmup_epochs:int, 
-                               start_warmup:float)->np.ndarray:
-    """Get the learning rate schedule using cosine annealing with warmup
-    
-    This schedule start with a warmup learning rate and then decrease to the final learning rate
+                               start_warmup:float,
+                               schedule_type:str="cosine_warmup",
+                               step_decay_rate:float=0.1,
+                               step_decay_every:int=5)->np.ndarray:
+    """Get the learning rate schedule.
+
+    Supports two schedule types:
+    - "cosine_warmup": linear warmup followed by cosine annealing to final_lr.
+    - "step_decay": multiplies lr by step_decay_rate every step_decay_every epochs
+      (inverse time decay as in Cué La Rosa et al., 2021).
 
     Parameters
     ----------
@@ -426,37 +432,52 @@ def get_learning_rate_schedule(train_loader: torch.utils.data.DataLoader,
     base_lr : float
         base learning rate
     final_lr : float
-        final learning rate
+        final learning rate (only used by cosine_warmup)
     epochs : int
         number of total epochs to run
     warmup_epochs : int
-        number of warmup epochs
+        number of warmup epochs (only used by cosine_warmup)
     start_warmup : float
-        initial warmup learning rate
+        initial warmup learning rate (only used by cosine_warmup)
+    schedule_type : str
+        "cosine_warmup" or "step_decay"
+    step_decay_rate : float
+        multiplicative factor applied every step_decay_every epochs (only for step_decay)
+    step_decay_every : int
+        number of epochs between each decay step (only for step_decay)
 
     Returns
     -------
     np.array
-        learning rate schedule
+        learning rate schedule (one value per training iteration)
     """
+    steps_per_epoch = len(train_loader)
+    total_iters = steps_per_epoch * epochs
 
-    # define a linear distribuition from start_warmup to base_lr
-    warmup_lr_schedule = np.linspace(start_warmup, base_lr, len(train_loader) * warmup_epochs)
-    
-    # iteration numbers
-    iters = np.arange(len(train_loader) * (epochs - warmup_epochs))
+    if schedule_type == "cosine_warmup":
+        warmup_lr_schedule = np.linspace(start_warmup, base_lr, steps_per_epoch * warmup_epochs)
 
-    cosine_lr_schedule = []
+        iters = np.arange(steps_per_epoch * (epochs - warmup_epochs))
+        cosine_lr_schedule = np.array([
+            final_lr + 0.5 * (base_lr - final_lr) * (1 + math.cos(math.pi * t / (steps_per_epoch * (epochs - warmup_epochs))))
+            for t in iters
+        ])
 
-    for t in iters:
+        lr_schedule = np.concatenate((warmup_lr_schedule, cosine_lr_schedule))
 
-        lr = final_lr + 0.5 * (base_lr - final_lr) * (1 + math.cos(math.pi * t / (len(train_loader) * (epochs - warmup_epochs))))
+    elif schedule_type == "step_decay":
+        lr_schedule = np.empty(total_iters)
+        current_lr = base_lr
+        for epoch in range(epochs):
+            if epoch > 0 and epoch % step_decay_every == 0:
+                current_lr *= step_decay_rate
+            start = epoch * steps_per_epoch
+            end = start + steps_per_epoch
+            lr_schedule[start:end] = current_lr
 
-        cosine_lr_schedule.append(lr)
-
-    cosine_lr_schedule = np.array(cosine_lr_schedule)
-
-    lr_schedule = np.concatenate((warmup_lr_schedule, cosine_lr_schedule))
+    else:
+        raise ValueError(f"Unknown lr schedule type: '{schedule_type}'. "
+                         f"Supported: 'cosine_warmup', 'step_decay'.")
 
     return lr_schedule
 
@@ -475,6 +496,7 @@ def train_epochs(last_checkpoint:str,
                  current_iter_folder:str,
                  lambda_weight:float,
                  patience:int=5,
+                 early_stopping_threshold:float=0.001,
                  ):
     """Train the model with the specified epochs numbers
 
@@ -520,7 +542,8 @@ def train_epochs(last_checkpoint:str,
             break
         
         np.random.shuffle(train_loader.dataset.coords)
-        np.random.shuffle(val_loader.dataset.coords)
+        # NOTE: val_loader.coords should NOT be shuffled - validation set must remain fixed
+        # to ensure consistent evaluation across epochs and prevent overfitting
 
         # train the network for one epoch
         logger.info("============ Starting epoch %i ... ============" % epoch)
@@ -553,7 +576,8 @@ def train_epochs(last_checkpoint:str,
         
         logger.info("scores_tr: {}".format(f1_avg))
 
-        is_best = (f1_avg - best_val) > 0.0009
+        # Check if model improved based on early_stopping_threshold
+        is_best = (f1_avg - best_val) > early_stopping_threshold
 
         # save checkpoints        
         if is_best: 
@@ -760,7 +784,7 @@ def train_iteration(current_iter_folder: str, args: dict):
         num_workers=args.workers,
         pin_memory=True,
         drop_last=True,
-        shuffle=True,
+        shuffle=False,  # Validation set should not be shuffled to ensure consistent evaluation
     )
     logger.info(f"[DEBUG] val_loader created with {len(val_loader)} batches")
 
@@ -790,14 +814,20 @@ def train_iteration(current_iter_folder: str, args: dict):
     )
     logger.info("[DEBUG] Optimizer created")
 
-    logger.info("[DEBUG] Creating learning rate schedule...")
+    schedule_type = getattr(args, 'lr_schedule_type', 'cosine_warmup')
+    step_decay_rate = getattr(args, 'step_decay_rate', 0.1)
+    step_decay_every = getattr(args, 'step_decay_every', 5)
+    logger.info(f"[DEBUG] Creating learning rate schedule (type={schedule_type})...")
     lr_schedule = get_learning_rate_schedule(
         train_loader, 
         args.base_lr, 
         args.final_lr, 
         args.epochs, 
         args.warmup_epochs, 
-        args.start_warmup
+        args.start_warmup,
+        schedule_type=schedule_type,
+        step_decay_rate=step_decay_rate,
+        step_decay_every=step_decay_every,
     )
     logger.info("Building optimizer done.")
     
@@ -852,7 +882,9 @@ def train_iteration(current_iter_folder: str, args: dict):
                      to_restore["count_early"],
                      val_loader=val_loader,
                      current_iter_folder=current_iter_folder,
-                     lambda_weight=args.lambda_weight)
+                     lambda_weight=args.lambda_weight,
+                     patience=getattr(args, 'patience', 5),
+                     early_stopping_threshold=getattr(args, 'early_stopping_threshold', 0.001))
     gc.collect()
 
     model = load_weights(model, current_checkpoint)
@@ -1072,6 +1104,38 @@ def generate_labels_for_next_iteration(current_iter_folder: str, args: dict):
     global_ref_stats = compute_reference_stats(all_regions_old_labels)
     logger.info(f"Global reference stats computed for {len(global_ref_stats)} tree types")
     
+    # ========== PHASE 1.5: Calculate global Otsu thresholds if using otsu_per_class method ==========
+    global_otsu_thresholds = None
+    filter_method = getattr(args, 'filter_method', 'fixed')
+    if filter_method == "otsu_per_class":
+        from sample_selection_vector import collect_global_otsu_samples, calculate_global_otsu_thresholds
+        
+        logger.info("Phase 1.5: Calculating global Otsu thresholds from all regions...")
+        otsu_sample_size = getattr(args, 'otsu_sample_size', 10000)
+        otsu_random_seed = getattr(args, 'otsu_random_seed', 42)
+        sigma = getattr(args, 'sigma', 9)
+        
+        # Collect samples from all regions
+        global_samples = collect_global_otsu_samples(
+            current_iter_folder=current_iter_folder,
+            args=args,
+            num_regions=num_regions,
+            otsu_sample_size=otsu_sample_size,
+            otsu_random_seed=otsu_random_seed,
+            sigma=sigma,
+        )
+        
+        # Calculate global thresholds
+        global_otsu_thresholds = calculate_global_otsu_thresholds(
+            global_samples=global_samples,
+            prob_thr=getattr(args, 'prob_thr', None),
+            depth_thr=getattr(args, 'depth_thr', None),
+        )
+        
+        logger.info(f"Global Otsu thresholds calculated for {len(global_otsu_thresholds)} class(es)")
+        for class_id, threshold in global_otsu_thresholds.items():
+            logger.info(f"  Class {class_id}: threshold = {threshold:.4f}")
+    
     # ========== PHASE 2: Process each region and collect deltas ==========
     logger.info("Phase 2: Processing each region...")
     all_deltas = []
@@ -1082,7 +1146,7 @@ def generate_labels_for_next_iteration(current_iter_folder: str, args: dict):
         logger.info(f"=== Processing Region {region_idx} ===")
         
         delta_gdf, unbalanced_delta_gdf, data = process_region_for_global_selection(
-            current_iter_folder, args, region_idx, global_ref_stats
+            current_iter_folder, args, region_idx, global_ref_stats, global_otsu_thresholds
         )
         
         if delta_gdf is not None and not delta_gdf.empty:
@@ -1205,6 +1269,7 @@ def process_region_for_global_selection(
     args: dict, 
     region_idx: int,
     global_ref_stats: pd.DataFrame,
+    global_otsu_thresholds: dict = None,
 ) -> tuple:
     """
     Process a single region for global sample selection.
@@ -1222,6 +1287,9 @@ def process_region_for_global_selection(
         Index of the region to process
     global_ref_stats : pd.DataFrame
         Global reference statistics computed from all regions
+    global_otsu_thresholds : dict, optional
+        Pre-calculated global Otsu thresholds per class. If provided, these will be used
+        instead of calculating thresholds per region.
     
     Returns
     -------
@@ -1311,7 +1379,10 @@ def process_region_for_global_selection(
     if filter_method == "fixed":
         logger.info(f"Region {region_idx}: Filtering components with depth+prob >= {args.depth_thr + args.prob_thr}")
     else:
-        logger.info(f"Region {region_idx}: Filtering components using Otsu thresholds per class (method: {filter_method})")
+        if global_otsu_thresholds is not None:
+            logger.info(f"Region {region_idx}: Filtering components using global Otsu thresholds per class (method: {filter_method})")
+        else:
+            logger.info(f"Region {region_idx}: Filtering components using Otsu thresholds per class (method: {filter_method})")
     
     new_pred_gdf = filter_map_by_depth_prob_to_gdf(
         new_pred_map, new_prob_map, new_depth_map,
@@ -1319,6 +1390,7 @@ def process_region_for_global_selection(
         filter_method=filter_method,
         otsu_sample_size=otsu_sample_size,
         otsu_random_seed=otsu_random_seed,
+        global_otsu_thresholds=global_otsu_thresholds,
     )
     logger.info(f"Region {region_idx}: After threshold filter: {len(new_pred_gdf)} components")
     
