@@ -1,6 +1,7 @@
 import gc
 import os
-from os.path import join, exists
+import threading
+from os.path import dirname, join, exists
 from logging import Logger
 from logging import getLogger
 from typing import Literal, Tuple, Optional
@@ -21,6 +22,7 @@ from src.utils import (add_padding_new, check_folder,
                        extract_patches_coord, get_device)
 
 from src.io_operations import get_image_metadata, load_norm, read_yaml,  convert_tiff_to_npy, check_file_extension, get_npy_filepath_from_tiff
+from visualization import plot_eval_input_grid
 
 
 ROOT_PATH = os.path.dirname(__file__)
@@ -35,7 +37,12 @@ def predict_network(ortho_image_shape: Tuple,
                     crop_size: int,
                     input_dimension: Optional[int] = None,
                     activation_aux_layer: Literal["sigmoid", "relu", "gelu"] = "sigmoid",
-                    debug_mode: bool = False):
+                    debug_mode: bool = False,
+                    save_visualization: bool = False,
+                    region_idx: Optional[int] = None,
+                    current_iter_folder: Optional[str] = None,
+                    overlap: Optional[float] = None,
+                    num_regions: int = 1):
     """
     It runs the inference of the entire image map.
     Get depth values and the probability of each class.
@@ -60,6 +67,16 @@ def predict_network(ortho_image_shape: Tuple,
         outputs are resized back to crop_size.
     activation_aux_layer : str
         Activation function for auxiliary output
+    save_visualization : bool
+        Whether to save input grid visualization (default: False)
+    region_idx : int, optional
+        Index of the region being evaluated (required if save_visualization=True)
+    current_iter_folder : str, optional
+        Path to current iteration folder (required if save_visualization=True)
+    overlap : float, optional
+        Overlap rate used (required if save_visualization=True)
+    num_regions : int
+        Total number of regions (default: 1)
 
     Returns
     -------
@@ -96,6 +113,44 @@ def predict_network(ortho_image_shape: Tuple,
         for i, (image, slices) in enumerate(tqdm(dataloader)):      
             # ============ forward pass ... ============
             input_batch = image.to(DEVICE, non_blocking=True, dtype=torch.float)
+            
+            # Capture 3rd batch (i == 2) for visualization
+            if save_visualization and i == 2:
+                # Convert batch to CPU and numpy for visualization (non-blocking)
+                image_batch_np = input_batch.data.cpu().numpy()
+                
+                # Determine output path
+                # Extract iteration number from current_iter_folder
+                iter_num = int(current_iter_folder.split("iter_")[-1].split("/")[0].split("\\")[0])
+                
+                # Create visualization folder structure
+                base_folder = dirname(current_iter_folder)
+                viz_folder = join(base_folder, "visualization", "eval_inputs")
+                check_folder(viz_folder)
+                
+                # Create filename
+                if num_regions > 1:
+                    filename = f"{iter_num:03d}_region_{region_idx}_overlap_{overlap}_input_grid.png"
+                else:
+                    filename = f"{iter_num:03d}_overlap_{overlap}_input_grid.png"
+                
+                output_path = join(viz_folder, filename)
+                
+                # Start visualization in separate thread
+                viz_thread = threading.Thread(
+                    target=plot_eval_input_grid,
+                    args=(
+                        image_batch_np,
+                        output_path,
+                        region_idx if region_idx is not None else 0,
+                        overlap if overlap is not None else 0.0,
+                        crop_size,
+                        input_dimension,
+                        num_regions
+                    )
+                )
+                viz_thread.daemon = True  # Thread will not prevent program exit
+                viz_thread.start()
             
             out_pred = model(input_batch) 
             
@@ -167,6 +222,8 @@ def evaluate_overlap(prediction_path: str,
                      args,
                      ortho_image_path: str = None,
                      save_compressed: bool = True,
+                     region_idx: Optional[int] = None,
+                     num_regions: int = 1,
 ):
     """This function runs an evaluation on the entire image.
     The image is divided into patches, that will be the inputs of the model.
@@ -189,6 +246,10 @@ def evaluate_overlap(prediction_path: str,
         Arguments including size_crops, input_dimension, etc.
     ortho_image_path : str, optional
         Path to the orthoimage. If None, uses args.ortho_image (backwards compatible)
+    region_idx : int, optional
+        Index of the region being evaluated (for multi-region support)
+    num_regions : int
+        Total number of regions (default: 1)
     """
     
     DEVICE = get_device()
@@ -343,7 +404,9 @@ def evaluate_iteration(current_iter_folder:str, args:dict):
                 ortho_image_shape,
                 args=args,
                 ortho_image_path=ortho_image_path,
-                save_compressed=False)
+                save_compressed=False,
+                region_idx=region_idx,
+                num_regions=num_regions)
             
             logger.info(f"Region {region_idx}, Overlap {overlap} done.")
 
@@ -404,7 +467,9 @@ def evaluate_iteration_single_region(current_iter_folder: str, args: dict, regio
             ortho_image_shape,
             args=args,
             ortho_image_path=ortho_image_path,
-            save_compressed=False)
+            save_compressed=False,
+            region_idx=region_idx,
+            num_regions=num_regions)
         
         logger.info(f"Region {region_idx}, Overlap {overlap} done.")
 

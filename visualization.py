@@ -1,10 +1,12 @@
 import gc
+import warnings
 from os.path import dirname, join
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import numpy as np
 from skimage.color import label2rgb
 from skimage.measure import find_contours
+from logging import CRITICAL, getLogger
 
 from src.io_operations import read_tiff
 from src.utils import check_folder, run_in_process, run_in_thread
@@ -283,7 +285,131 @@ def generate_labels_view(current_iter_folder: str, orthoimage_path: str, train_s
     )
 
 
+def plot_eval_input_grid(
+    image_batch: np.ndarray,
+    output_path: str,
+    region_idx: int,
+    overlap: float,
+    crop_size: int,
+    input_dimension: int,
+    num_regions: int = 1
+):
+    """
+    Plota um grid 4x4 com recortes de entrada do modelo durante avaliação.
+    Esta função é executada em uma thread separada para não impactar o desempenho da inferência.
     
+    Parameters
+    ----------
+    image_batch : np.ndarray
+        Batch de imagens no formato (B, C, H, W) já convertido para numpy
+    output_path : str
+        Caminho completo para salvar a figura
+    region_idx : int
+        Índice da região sendo avaliada
+    overlap : float
+        Taxa de overlap usada
+    crop_size : int
+        Tamanho do recorte original
+    input_dimension : int
+        Tamanho da entrada do modelo (pode ser diferente de crop_size)
+    num_regions : int
+        Número total de regiões (para determinar se incluir prefixo de região no nome)
+    """
+    try:
+        # Selecionar até 16 imagens do batch
+        num_images = min(16, image_batch.shape[0])
+        
+        if num_images == 0:
+            return
+        
+        # Selecionar bandas apropriadas (similar a plot_figures)
+        num_channels = image_batch.shape[1]
+        
+        if num_channels == 25:
+            # Hyperspectral image - use bands 5, 3, 2
+            selected_batch = image_batch[:num_images, [5, 3, 2], :, :]
+        elif num_channels == 4:
+            # 4-band image (e.g., RGB + NIR) - use first 3 bands (RGB)
+            selected_batch = image_batch[:num_images, [0, 1, 2], :, :]
+        elif num_channels >= 3:
+            # Multi-band image - use first 3 bands
+            selected_batch = image_batch[:num_images, [0, 1, 2], :, :]
+        else:
+            # Less than 3 bands - use all available
+            selected_batch = image_batch[:num_images, :, :, :]
+            # Se tiver menos de 3 canais, replicar para RGB
+            if selected_batch.shape[1] == 1:
+                selected_batch = np.repeat(selected_batch, 3, axis=1)
+            elif selected_batch.shape[1] == 2:
+                # Duplicar último canal para ter 3
+                selected_batch = np.concatenate([selected_batch, selected_batch[:, -1:, :, :]], axis=1)
+        
+        # Converter de (B, C, H, W) para (B, H, W, C)
+        selected_batch = np.moveaxis(selected_batch, 1, 3)
+        
+        # Normalizar valores para [0, 1]
+        if selected_batch.max() > 1.0:
+            # Se valores estão acima de 1, provavelmente são valores normalizados mas em escala diferente
+            # Usar quantis para normalização
+            quantiles = np.quantile(selected_batch, 0.99, axis=(1, 2), keepdims=True)
+            quantiles = np.where(quantiles == 0, 1, quantiles)
+            selected_batch = np.divide(selected_batch, quantiles)
+            selected_batch = np.clip(selected_batch, 0, 1)
+        
+        # Tratar NaN/Inf
+        selected_batch = np.nan_to_num(selected_batch, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        # Criar grid 4x4
+        nrows = 4
+        ncols = 4
+        
+        # Configurar matplotlib para não mostrar warnings
+        getLogger('matplotlib').setLevel(level=CRITICAL)
+        warnings.filterwarnings("ignore")
+        
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 12))
+        
+        # Preencher o grid
+        img_idx = 0
+        for row in range(nrows):
+            for col in range(ncols):
+                ax = axes[row, col]
+                ax.set_axis_off()
+                
+                if img_idx < num_images:
+                    ax.imshow(selected_batch[img_idx], interpolation='nearest')
+                    # Adicionar título com informações do recorte
+                    ax.set_title(f'Crop: {crop_size}px\nInput: {input_dimension}px', 
+                               fontsize=8, pad=2)
+                else:
+                    # Deixar vazio se não houver mais imagens
+                    ax.text(0.5, 0.5, '', ha='center', va='center')
+                
+                img_idx += 1
+        
+        # Adicionar título geral
+        title_suffix = f"_region_{region_idx}" if num_regions > 1 else ""
+        fig.suptitle(f'Eval Input Grid - Overlap: {overlap}{title_suffix}', 
+                    fontsize=12, y=0.995)
+        
+        fig.subplots_adjust(top=0.95, bottom=0.05, left=0.05, right=0.95,
+                           wspace=0.02, hspace=0.1)
+        
+        # Salvar figura
+        plt.savefig(output_path, dpi=300, format='png', bbox_inches='tight')
+        plt.close(fig)
+        
+        gc.collect()
+        
+    except Exception as e:
+        # Log erro mas não interromper a inferência
+        logger = getLogger("__main__")
+        logger.warning(f"Error generating eval input grid visualization: {e}")
+        try:
+            plt.close('all')
+        except:
+            pass
+
 
 if __name__ == "__main__":
 
