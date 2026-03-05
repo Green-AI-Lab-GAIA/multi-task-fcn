@@ -22,3 +22,5 @@ results/
 *.zip
 *.pem
 *.out
+*.pdf
+*.csv
