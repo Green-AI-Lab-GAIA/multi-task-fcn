@@ -2,12 +2,12 @@
 ### FILE PATHS ###
 ##################
 # experiment directory
-model_dir: exp_deeplabv3+_resnet9
+model_dir: exp_deeplabvlaura
 checkpoint_file: checkpoint.pth.tar
 
 data_path: "bioflore_data/vLaura_v2"
 
-note: "Experimento vLaura - DeepLabv3+_resnet9 com dropout 0.65 - 1 iteração apenas"
+note: "Experimento vLaura - DeepLabVLaura (arquitetura fiel ao paper) com dropout 0.65 - 1 iteração apenas"
 
 # Input data for the model
 
@@ -45,13 +45,13 @@ validation_set: "train"
 ###### TRAINING parameters ######
 downsampling_factor: None
 # num samples per epoch
-samples: 140000
+samples: 5000
 # True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
-# convnet architecture --> IMPORTANTE: usando deeplabv3+_resnet9
-arch: deeplabv3+_resnet9
-# True for load pretrained weights from Imagenet (não aplicável para resnet9)
+# convnet architecture --> DeepLabVLaura: implementação fiel ao paper (Cué La Rosa et al., 2021)
+arch: deeplabvlaura
+# True for load pretrained weights from Imagenet (não aplicável para esta arquitetura)
 is_pretrained: False
 batch_norm: true
 # Dropout rate for deepvlab classification training
@@ -67,7 +67,7 @@ epochs: 50
 # GPU 16GB: batch_size 16-32 for input_dimension 256
 # GPU 16GB: batch_size 4-8 for input_dimension 512
 # NOTA: Com input_dimension 128, pode aumentar o batch_size
-batch_size: 128
+batch_size: 32
 
 # base learning rate
 base_lr: 0.1
@@ -108,10 +108,8 @@ seed: 3115
 # Size of crops extracted from the image (can be large, e.g., 1024)
 size_crops: 1024
 
-# Size of the input to the model (fixed, e.g., 128)
-# IMPORTANTE: DeepLabv3Plus_resnet9 REQUER input_dimension = 128
-# O modelo tem essa restrição hardcoded no código
-input_dimension: 128
+# Size of the input to the model (must be divisible by 4)
+input_dimension: 256
 
 ###############################
 #### Multi-scale crop settings ####
