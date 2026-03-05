@@ -15,3 +15,5 @@ rasterio
 torcheval
 millify
 pyarrow
+segmentation-models-pytorch
+torchview

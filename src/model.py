@@ -18,6 +18,7 @@ sys.path.append(ROOT_PATH)
 from src.deepvlab3 import DeepLabv3
 from src.deepvlab3plus import DeepLabv3_plus
 from src.deepvlab3plus_resnet9 import DeepLabv3Plus_resnet9
+from src.deeplabv3plus_smp import DeepLabV3Plus_SMP
 from src.metrics import evaluate_f1, evaluate_metrics
 from src.utils import (AverageMeter, check_folder, get_device, plot_figures)
 from src.io_operations import load_norm, read_yaml
@@ -63,6 +64,16 @@ def build_model(in_channels:list,
             num_class = num_classes,
             psize = psize,
             dropout_rate = dropout_rate
+        )
+
+    elif arch == "deeplabv3+_resnet18":
+        model = DeepLabV3Plus_SMP(
+            in_channels = in_channels,
+            num_classes = num_classes,
+            pretrained = pretrained,
+            dropout_rate = dropout_rate,
+            batch_norm = batch_norm,
+            psize = psize
         )
 
     elif arch.startswith("deeplabv3+"):
@@ -389,3 +400,87 @@ def save_checkpoint(last_checkpoint_path:str, model:nn.Module, optimizer:torch.o
         "count_early": count_early,
     }
     torch.save(save_dict, last_checkpoint_path)
+    
+
+def print_model_architecture(
+    model: nn.Module,
+    input_size: Tuple[int, ...] = (1, 4, 256, 256),
+    save_path: str | None = None,
+    depth: int = 10,
+) -> None:
+    """Print and optionally save the full model architecture for understanding/drawing.
+
+    - Tree view: every module and submodule (nn.Module hierarchy).
+    - Table view: layer names, types, output shapes, and parameter counts (via torchinfo).
+
+    Parameters
+    ----------
+    model : nn.Module
+        PyTorch model (e.g. from build_model).
+    input_size : tuple
+        (batch, channels, height, width) for summary. Default (1, 4, 256, 256).
+    save_path : str, optional
+        If set, architecture text is also written to this file.
+    depth : int
+        Depth of module tree in torchinfo summary. Increase for more detail (e.g. 15).
+    """
+    from torchinfo import summary
+
+    lines = []
+    lines.append("=" * 80)
+    lines.append("ARQUITETURA COMPLETA DO MODELO (árvore de módulos)")
+    lines.append("=" * 80)
+    lines.append("")
+    tree_str = str(model)
+    lines.append(tree_str)
+    lines.append("")
+    lines.append("=" * 80)
+    lines.append("RESUMO DETALHADO (shapes, parâmetros)")
+    lines.append("=" * 80)
+    lines.append("")
+    summ = summary(
+        model,
+        input_size=input_size,
+        depth=depth,
+        col_names=("input_size", "output_size", "num_params"),
+        verbose=1,
+    )
+    lines.append(str(summ))
+    lines.append("")
+    lines.append("=" * 80)
+    lines.append("LISTA DE MÓDULOS (nome -> tipo)")
+    lines.append("=" * 80)
+    for name, module in model.named_modules():
+        if name == "":
+            continue
+        lines.append(f"  {name}  ->  {type(module).__name__}")
+
+    full_text = "\n".join(lines)
+    print(full_text)
+
+    if save_path:
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(full_text)
+        print(f"\nArquitetura salva em: {save_path}")
+
+
+if __name__ == "__main__":
+    from torchinfo import summary
+
+    model = build_model(
+        in_channels=4,
+        num_classes=4,
+        arch="deeplabv3_resnet50",
+        pretrained=True,
+        psize=256,
+        dropout_rate=0.5,
+        batch_norm=True,
+    )
+
+    # Arquitetura detalhada no terminal e opcionalmente em arquivo para desenhar
+    print_model_architecture(
+        model,
+        input_size=(1, 4, 256, 256),
+        save_path=join(ROOT_PATH, "arquitetura_modelo.txt"),  # altere ou None para não salvar
+        depth=12,
+    )
