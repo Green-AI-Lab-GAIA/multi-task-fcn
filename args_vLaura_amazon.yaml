@@ -2,13 +2,14 @@
 ### FILE PATHS ###
 ##################
 # experiment directory (saved inside each iter folder)
-model_dir: exp_vLaura_deeplabvlaura_amazon
+model_dir: exp_vLaura_deeplabvlaura_resnet50_amazon
+
 checkpoint_file: checkpoint.pth.tar
 
-# Root folder where iterations/outputs will be created
-data_path: "amazon_data/vLaura_deeplabvlaura_v2"
+# Root folder where iterations/outputs will be created (versão 50k samples)
+data_path: "amazon_data/vLaura_deeplabvlaura_v4_512"
 
-note: "Experimento vLaura - DeepLabVLaura (arquitetura fiel ao paper) com dropout 0.65 rodando no amazon_data"
+note: "Experimento vLaura v3 - DeepLabVLaura com encoder ResNet-18 (pre-activation, ELU) e dropout 0.65 no amazon_data, 5000 samples por época"
 
 # Input data for the model
 
@@ -36,13 +37,13 @@ validation_set: "train"
 #################################
 ###### TRAINING parameters ######
 downsampling_factor: None
-# num samples per epoch
+# num samples per epoch (aumentado para 50.000)
 samples: 5000
 # True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
-# convnet architecture --> DeepLabVLaura: implementação fiel ao paper (Cué La Rosa et al., 2021)
-arch: deeplabvlaura
+# convnet architecture --> DeepLabVLaura com encoder ResNet-18 (mesmo padrão pre-activation/ELU do paper)
+arch: deeplabvlaura_resnet50
 # True for load pretrained weights from Imagenet (não aplicável para esta arquitetura)
 is_pretrained: False
 batch_norm: true
@@ -56,14 +57,20 @@ lambda_weight: 1
 # number of total epochs to run
 epochs: 100
 # batch size per gpu, i.e. how many unique instances per gpu
-# GPU 16GB: batch_size 16-32 for input_dimension 256
-# GPU 16GB: batch_size 4-8 for input_dimension 512
-# NOTA: Com input_dimension 128, pode aumentar o batch_size
-batch_size: 32
+# NOTA: ResNet-18 encoder usa downsampling /4 (vs /32 do ResNet-50), gerando feature maps
+# 64x maiores na memória. Amazon tem 17 classes (vs 4 do bioflore), exigindo mais VRAM.
+# GPU 16GB: batch_size 4 for input_dimension 256 (resnet18 encoder, 17 classes)
+# GPU 16GB: batch_size 2 for input_dimension 512 (resnet18 encoder, 17 classes)
+batch_size: 4
+
+# Gradient accumulation: acumula gradientes por N passos antes de atualizar os pesos,
+# simulando um batch_size efetivo de batch_size * gradient_accumulation_steps.
+# Exemplo: batch_size=4, gradient_accumulation_steps=8 → effective_batch_size=32 (igual ao anterior)
+gradient_accumulation_steps: 8
 
 # Evaluation batch size (se não especificado, cai para batch_size acima)
 # Manter menor na avaliação evita estouro de memória (CUDA OOM)
-eval_batch_size: 64
+eval_batch_size: 16
 
 # base learning rate
 base_lr: 0.1
@@ -98,10 +105,10 @@ seed: 3115
 ###############################
 
 # Size of crops extracted from the image (can be large, e.g., 1024)
-size_crops: 1024
+size_crops: 512
 
 # Size of the input to the model (must be divisible by 4)
-input_dimension: 256
+input_dimension: 512
 
 ###############################
 #### Multi-scale crop settings ####
@@ -110,10 +117,10 @@ input_dimension: 256
 # During training, crop size is sampled uniformly between min and max
 # Set min_crop_size = max_crop_size to disable multi-scale
 min_crop_size: 512      # Minimum crop size (pixels)
-max_crop_size: 2048     # Maximum crop size (pixels)
+max_crop_size: 512     # Maximum crop size (pixels)
 
 # Fixed crop size for evaluation/validation
-eval_crop_size: 1024
+eval_crop_size: 512
 
 # Amazon classes (labels 1..17)
 nb_class: 17
