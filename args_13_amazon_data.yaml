@@ -6,7 +6,7 @@ model_dir: exp_deeplab_v4
 checkpoint_file: checkpoint.pth.tar
 
 # Root folder where iterations/outputs will be created
-data_path: "amazon_data/13_amazon_data"
+data_path: "amazon_data/13_amazon_data_v2"
 
 note: "Usando mais opções de overlap com [0.1, 0.5]. Aumentando o tamanho do sigma aplicado as imagens"
 
