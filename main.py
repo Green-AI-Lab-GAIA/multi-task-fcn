@@ -556,7 +556,9 @@ def train_epochs(last_checkpoint:str,
                                  epoch=epoch, 
                                  lr_schedule=lr_schedule, 
                                  figures_path=figures_path, 
-                                 lambda_weight=lambda_weight)
+                                 lambda_weight=lambda_weight,
+                                 gradient_accumulation_steps=getattr(args, 'gradient_accumulation_steps', 1),
+                                 nb_class=args.nb_class)
         
         logger.info("Evaluating the model...")
         f1_avg, f1_by_class_avg = eval(val_loader, model, args.nb_class)
