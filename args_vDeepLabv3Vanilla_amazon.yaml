@@ -2,11 +2,11 @@
 ### FILE PATHS ###
 ##################
 # experiment directory (saved inside each iter folder)
-model_dir: exp_vDeepLabv3_resnet50_vanilla_amazon
+model_dir: exp_vDeepLabv3Vanilla
 checkpoint_file: checkpoint.pth.tar
 
 # Root folder where iterations/outputs will be created
-data_path: "amazon_data/vDeepLabv3Vanilla_resnet50_v2"
+data_path: "amazon_data/vDeepLabv3Vanilla_amazon_v512"
 
 note: "DeepLabv3_resnet50 Vanilla (lambda_weight=0) rodando no amazon_data"
 
@@ -82,12 +82,12 @@ seed: 3115
 ###############################
 
 # Size of crops extracted from the image (can be large, e.g., 1024)
-size_crops: 1024
+size_crops: 512
 
 # Size of the input to the model (fixed, e.g., 256)
 # The crops are resized to this dimension before being fed to the model
 # Output is then resized back to size_crops
-input_dimension: 256
+input_dimension: 512
 
 ###############################
 #### Multi-scale crop settings ####
@@ -96,10 +96,10 @@ input_dimension: 256
 # During training, crop size is sampled uniformly between min and max
 # Set min_crop_size = max_crop_size to disable multi-scale
 min_crop_size: 512      # Minimum crop size (pixels)
-max_crop_size: 2048     # Maximum crop size (pixels)
+max_crop_size: 512     # Maximum crop size (pixels)
 
 # Fixed crop size for evaluation/validation
-eval_crop_size: 1024
+eval_crop_size: 512
 
 # Amazon classes (labels 1..17)
 nb_class: 17
@@ -132,3 +132,10 @@ scale_area: None
 
 # Sigma value for gaussian filter in distance map
 sigma: 30
+
+################################
+## Multi-GPU (DataParallel)   ##
+################################
+# Set True to use all available GPUs via DataParallel.
+# Set False to use single GPU (cuda:0).
+multi_gpu: False
