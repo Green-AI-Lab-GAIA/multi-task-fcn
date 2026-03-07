@@ -31,7 +31,7 @@ logger = getLogger("__main__")
 
 def build_model(in_channels:list, 
                 num_classes:int, 
-                arch:Literal["deeplabv3_resnet50","deeplabv3_resnet101","deeplabv3+_resnet34","deeplabv3+_resnet18","deeplabv3+_resnet10", "deeplabv3+_resnet9", "deeplabvlaura"], 
+                arch:Literal["deeplabv3_resnet50","deeplabv3_resnet101","deeplabv3+_resnet34","deeplabv3+_resnet18","deeplabv3+_resnet10", "deeplabv3+_resnet9", "deeplabvlaura", "deeplabvlaura_resnet18", "deeplabvlaura_resnet50"], 
                 pretrained:bool, 
                 psize:int,
                 dropout_rate:float,
@@ -72,7 +72,26 @@ def build_model(in_channels:list,
             num_ch = in_channels,
             num_class = num_classes,
             psize = psize,
-            dropout_rate = dropout_rate
+            dropout_rate = dropout_rate,
+            encoder_name = "resnet9"
+        )
+
+    elif arch == "deeplabvlaura_resnet18":
+        model = DeepLabVLaura(
+            num_ch = in_channels,
+            num_class = num_classes,
+            psize = psize,
+            dropout_rate = dropout_rate,
+            encoder_name = "resnet18"
+        )
+
+    elif arch == "deeplabvlaura_resnet50":
+        model = DeepLabVLaura(
+            num_ch = in_channels,
+            num_class = num_classes,
+            psize = psize,
+            dropout_rate = dropout_rate,
+            encoder_name = "resnet50"
         )
 
     elif arch == "deeplabv3+_resnet18":
@@ -197,7 +216,9 @@ def train(train_loader:torch.utils.data.DataLoader,
           lr_schedule:np.ndarray, 
           lambda_weight:float,
           activation_aux_layer:Literal["sigmoid", "relu", "gelu"] = "sigmoid",
-          figures_path:str=None):
+          figures_path:str=None,
+          gradient_accumulation_steps:int=1,
+          nb_class:int=4):
     """Train model for one epoch
 
     Parameters
@@ -215,7 +236,10 @@ def train(train_loader:torch.utils.data.DataLoader,
     lambda_weight : float
         Weight for the auxiliary task
     figures_path : str
-        Path to save sample figures 
+        Path to save sample figures
+    gradient_accumulation_steps : int
+        Number of forward passes before calling optimizer.step(). Simulates
+        an effective batch size of batch_size * gradient_accumulation_steps.
 
     Returns
     -------
@@ -248,19 +272,21 @@ def train(train_loader:torch.utils.data.DataLoader,
     # criterion = nn.NLLLoss(reduction='none').cuda()
     aux_criterion = nn.MSELoss(reduction='none').to(DEVICE)
 
+    optimizer.zero_grad(set_to_none=True)
+
     for it, (inp_img, depth, ref) in enumerate(tqdm(train_loader)):      
 
-        # update learning rate
-        iteration = epoch * len(train_loader) + it
+        # update learning rate — avança apenas nos passos de atualização efetivos
+        effective_step = (epoch * len(train_loader) + it) // gradient_accumulation_steps
+        lr = lr_schedule[min(effective_step, len(lr_schedule) - 1)]
         for param_group in optimizer.param_groups:
-            param_group["lr"] = lr_schedule[iteration]
+            param_group["lr"] = lr
 
         # ============ forward pass and loss ... ============
         # compute model loss and output
         inp_img = inp_img.to(DEVICE, non_blocking=True)
         depth = depth.to(DEVICE, non_blocking=True)
         ref = ref.to(DEVICE, non_blocking=True)
-
 
         # create mask for the unknown pixels
         mask = torch.where(ref == 0, torch.tensor(0.0), torch.tensor(1.0))
@@ -280,14 +306,20 @@ def train(train_loader:torch.utils.data.DataLoader,
         loss = (loss1 + lambda_weight*loss2)/2 
         loss = torch.sum(loss)/torch.sum(ref>0)
 
-        # clear previous gradients, compute gradients of all variables wrt loss
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        # Normaliza o loss pelo número de passos de acumulação para manter
+        # a escala equivalente à do batch maior simulado
+        loss_scaled = loss / gradient_accumulation_steps
+        loss_scaled.backward()
+
+        # Atualiza os pesos apenas a cada gradient_accumulation_steps passos
+        is_accumulation_step = (it + 1) % gradient_accumulation_steps == 0
+        is_last_batch = (it + 1) == len(train_loader)
+
+        if is_accumulation_step or is_last_batch:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
         
-        # performs updates using calculated gradients
-        optimizer.step()
-        
-        # update the average loss
+        # update the average loss (registra o loss original, não o normalizado)
         loss_avg.update(loss)
 
         wandb.log({"train/loss": loss})
@@ -297,7 +329,7 @@ def train(train_loader:torch.utils.data.DataLoader,
         # Evaluate summaries only once in a while
         if it % 50 == 0:
             with torch.no_grad():
-                summary_batch = evaluate_metrics(soft(out_batch['out']), ref)
+                summary_batch = evaluate_metrics(soft(out_batch['out']), ref, num_class=nb_class)
             
             logger.info(
                 "Epoch: [{0}][{1}]\t"
