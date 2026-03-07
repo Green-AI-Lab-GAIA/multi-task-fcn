@@ -63,6 +63,19 @@ def evaluate_metrics(pred:Union[np.ndarray, torch.Tensor], gt:Union[np.ndarray, 
     # Create to just the place where the ground_truth_segmentation is non zero
     mask = np.where(gt>0)
 
+    # Guard: batch sem pixels anotados (gt todo zero). Evita ValueError em jaccard_score e cohen_kappa_score.
+    if len(gt[mask]) == 0:
+        list_of_labels = list(range(1, num_class + 1))
+        accu_criteria["avgIOU"] = 0.0
+        accu_criteria["Accuracy"] = 0.0
+        accu_criteria["avgF1"] = 0.0
+        accu_criteria["avgPre"] = 0.0
+        accu_criteria["avgRec"] = 0.0
+        accu_criteria["F1"] = [0.0] * num_class
+        accu_criteria["Pre"] = [0.0] * num_class
+        accu_criteria["Rec"] = [0.0] * num_class
+        accu_criteria["KappaScore"] = 0.0
+        return accu_criteria
 
     comp_pred = label(pred)
     
@@ -84,8 +97,20 @@ def evaluate_metrics(pred:Union[np.ndarray, torch.Tensor], gt:Union[np.ndarray, 
 
     # Apply Mask
     gt = gt[mask][:]
-
     pred = pred[mask][:]+1
+
+    # Guard: batch vazio ou sem labels válidas no ground truth.
+    # cohen_kappa_score e outras métricas falham com "At least one label specified must be in y_true"
+    if len(gt) == 0 or not np.any(np.isin(gt, list_of_labels)):
+        accu_criteria["Accuracy"] = 0.0
+        accu_criteria["avgF1"] = 0.0
+        accu_criteria["avgPre"] = 0.0
+        accu_criteria["avgRec"] = 0.0
+        accu_criteria["F1"] = [0.0] * num_class
+        accu_criteria["Pre"] = [0.0] * num_class
+        accu_criteria["Rec"] = [0.0] * num_class
+        accu_criteria["KappaScore"] = 0.0
+        return accu_criteria
 
     #### CALCULATE METRICS WITH SKLEARN ####
     accuracy = accuracy_score(gt, pred)*100
