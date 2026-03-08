@@ -1,0 +1,14 @@
+---
+description: Proibir comandos destrutivos sem solicitação explícita do usuário
+alwaysApply: true
+---
+
+# Comandos Destrutivos
+
+NUNCA execute os comandos abaixo sem o usuário pedir **explicitamente**:
+
+- `kill`, `pkill`, `killall` — matar processos
+- `rm -rf` — apagar arquivos ou pastas
+- Qualquer comando que interrompa um processo em execução ou delete dados
+
+Se precisar de uma dessas ações para completar uma tarefa, **pergunte primeiro**.
