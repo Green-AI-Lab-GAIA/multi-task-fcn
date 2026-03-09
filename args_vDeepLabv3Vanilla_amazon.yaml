@@ -2,11 +2,11 @@
 ### FILE PATHS ###
 ##################
 # experiment directory (saved inside each iter folder)
-model_dir: exp_vDeepLabv3Vanilla
+model_dir: exp_vDeepLabv3Vanilla_run_01
 checkpoint_file: checkpoint.pth.tar
 
 # Root folder where iterations/outputs will be created
-data_path: "amazon_data/vDeepLabv3Vanilla_amazon_v512"
+data_path: "amazon_data/vDeepLabv3Vanilla_amazon_v512_run_01"
 
 note: "DeepLabv3_resnet50 Vanilla (lambda_weight=0) rodando no amazon_data"
 
@@ -57,7 +57,12 @@ lambda_weight: 0
 # number of total epochs to run
 epochs: 50
 # batch size per gpu, i.e. how many unique instances per gpu
-batch_size: 32
+# Com gradient_accumulation_steps=2, effective_batch_size = 8*2 = 16
+batch_size: 8
+
+# Gradient accumulation: acumula gradientes por N passos antes de atualizar os pesos.
+# effective_batch_size = batch_size * gradient_accumulation_steps = 16
+gradient_accumulation_steps: 4
 
 # base learning rate
 base_lr: 0.01
