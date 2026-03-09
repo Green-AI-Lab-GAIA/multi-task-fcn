@@ -1,18 +1,19 @@
 ##################
 ### FILE PATHS ###
 ##################
-# experiment directory (saved inside each iter folder)
 model_dir: exp_deeplab_v4
 checkpoint_file: checkpoint.pth.tar
 
-# Root folder where iterations/outputs will be created
-data_path: "amazon_data/13_amazon_data_v2"
+data_path: "amazon_data/13_amazon_data_v4"
 
-note: "Usando mais opções de overlap com [0.1, 0.5]. Aumentando o tamanho do sigma aplicado as imagens"
+note: >
+  v4 — Crop fixo de 512 e input_dimension fixo de 512, sem variação de escala.
+  Motivação: eliminar completamente o mismatch treino-teste ao usar crop e entrada
+  com o mesmo tamanho fixo (512×512), sem multi-scale. Demais hiperparâmetros
+  iguais à v3: batch_norm=true, batch_size=32, pretrained, lambda_weight=1,
+  dropout=0.5, overlap=[0.3, 0.5].
 
-# Input data for the model
-
-# Single-region config (Amazon)
+num_regions: 1
 ortho_images:
   - "amazon_data/amazon_input_data/orthoimage/NOV_2017_FINAL_004.tif"
 
@@ -22,114 +23,81 @@ train_segmentation_paths:
 test_segmentation_paths:
   - "amazon_data/amazon_input_data/segmentation/test_set.tif"
 
-# Full segmentation (train + test combined)
 full_segmentation_paths:
   - "amazon_data/amazon_input_data/segmentation/full_set.tif"
 
-# Optional mask (used by sample selection); if missing, it will be auto-generated
 mask_paths:
   - "amazon_data/amazon_input_data/mask.tif"
 
-# You can use the 'test', 'train' or 'full' set as validation set
 validation_set: "train"
 
 #################################
 ###### TRAINING parameters ######
+#################################
 downsampling_factor: None
-# num samples per epoch
 samples: 5000
-# True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
-# convnet architecture --> 'resunet','deeplabv3_resnet50','deeplabv3+_resnet9', deeplabv3+
+
 arch: deeplabv3_resnet50
-# True for load pretrained weights from Imagenet
 is_pretrained: True
 batch_norm: true
-# Dropout rate for deepvlab classification training
 dropout_rate: 0.5
-
-# regularization weight of distance map
 lambda_weight: 1
 
 ### optim parameters ###
-# number of total epochs to run
 epochs: 30
-# batch size per gpu, i.e. how many unique instances per gpu
-# GPU 16GB: batch_size 16-32 for input_dimension 256
-# GPU 16GB: batch_size 4-8 for input_dimension 512
 batch_size: 32
-
-# base learning rate
 base_lr: 0.01
-# final learning rate
 final_lr: 0.0001
-# number of warmup epochs
 warmup_epochs: 5
-# initial warmup learning rate
 start_warmup: 0.0
-
-# weight decay
 weight_decay: 1e-06
 
 ### others parameters ###
-# number of data loading workers
 workers: 4
-# random seed
 seed: 3115
 
 ###############################
-#### Evaluation parameters ####
+#### Crop / Input settings ####
 ###############################
 
 # Size of crops extracted from the image (can be large, e.g., 1024)
-size_crops: 1024
+size_crops: 512
 
 # Size of the input to the model (fixed, e.g., 256)
 # The crops are resized to this dimension before being fed to the model
 # Output is then resized back to size_crops
-input_dimension: 256
+input_dimension: 512
 
 ###############################
 #### Multi-scale crop settings ####
 ###############################
 
-# During training, crop size is sampled uniformly between min and max
-# Set min_crop_size = max_crop_size to disable multi-scale
-min_crop_size: 512      # Minimum crop size (pixels)
-max_crop_size: 2048     # Maximum crop size (pixels)
+# Sem variação de escala: min == max == size_crops
+min_crop_size: 512
+max_crop_size: 512
 
-# Fixed crop size for evaluation/validation
-eval_crop_size: 1024
+# Crop fixo para avaliação/inferência
+eval_crop_size: 512
 
-# Amazon classes (labels 1..17)
 nb_class: 17
-
-# overlap fractions used during tiled inference
 overlap: [0.3, 0.5]
 
 ################################
 ## Active Learning parameters ##
 ################################
-
-# probability and distance map threshold to filter new components
 prob_thr: 0.7
 depth_thr: 0.5
 
-# Num of iter
 num_iter: 20
 
-# Area filter thresholds in square meters (m²)
-# Valores baseados nos experimentos antigos do Amazon (13_amazon_data)
-lower_limit_area: 10  # minimum area in m² (e.g., 40 m² ≈ 6.3m x 6.3m)
+lower_limit_area: 10
 upper_limit_area: "inf"
 
 lower_limit_area_rlted_to_tree_type: -0.3
 upper_limit_area_rlted_to_tree_type: 0.7
 lower_limit_solidity_rlted_to_tree_type: -0.5
 
-# Available scales: "log", None
 scale_area: None
-
-# Sigma value for gaussian filter in distance map
 sigma: 30
