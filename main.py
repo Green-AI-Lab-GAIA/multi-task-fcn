@@ -651,6 +651,7 @@ def train_iteration(current_iter_folder: str, args: dict):
     min_crop_size = getattr(args, 'min_crop_size', None)
     max_crop_size = getattr(args, 'max_crop_size', None)
     eval_crop_size = getattr(args, 'eval_crop_size', args.size_crops)
+    random_interpolation = getattr(args, 'random_interpolation', True)
     
     if min_crop_size is not None and max_crop_size is not None:
         logger.info(f"Multi-scale training enabled: crop size range [{min_crop_size}, {max_crop_size}]")
@@ -699,7 +700,8 @@ def train_iteration(current_iter_folder: str, args: dict):
             copy_paste_augmentation=args.copy_and_paste_augmentation,
             balance_regions=True,
             min_crop_size=min_crop_size,
-            max_crop_size=max_crop_size
+            max_crop_size=max_crop_size,
+            random_interpolation=random_interpolation
         )
         
         # Validation uses fixed crop size (eval_crop_size), no multi-scale
@@ -715,7 +717,8 @@ def train_iteration(current_iter_folder: str, args: dict):
             copy_paste_augmentation=False,
             balance_regions=True,
             min_crop_size=None,  # No multi-scale for validation
-            max_crop_size=None
+            max_crop_size=None,
+            random_interpolation=False
         )
         
         # Log sample distribution
@@ -735,7 +738,8 @@ def train_iteration(current_iter_folder: str, args: dict):
             input_dimension=input_dimension,
             copy_paste_augmentation=args.copy_and_paste_augmentation,
             min_crop_size=min_crop_size,
-            max_crop_size=max_crop_size
+            max_crop_size=max_crop_size,
+            random_interpolation=random_interpolation
         )
         
         # Validation uses fixed crop size (eval_crop_size), no multi-scale
@@ -750,7 +754,8 @@ def train_iteration(current_iter_folder: str, args: dict):
             input_dimension=input_dimension,
             copy_paste_augmentation=False,
             min_crop_size=None,  # No multi-scale for validation
-            max_crop_size=None
+            max_crop_size=None,
+            random_interpolation=False
         )
     
     # CRITICAL FIX: Lazy normalization - compute statistics only, normalize crops on-the-fly
