@@ -5,7 +5,7 @@
 model_dir: bioflore_data/vDeepLabv3Vanilla
 checkpoint_file: checkpoint.pth.tar
 
-data_path: "bioflore_data/vDeepLabv3Vanilla_v2"
+data_path: "bioflore_data/vDeepLabv3Vanilla_v2_v512"
 
 note: "DeepLabv3_resnet50 Vanilla - Sem task auxiliar (lambda_weight=0), pesos pré-treinados, 1 iteração"
 
@@ -97,12 +97,12 @@ seed: 3115
 ###############################
 
 # Size of crops extracted from the image (can be large, e.g., 1024)
-size_crops: 1024
+size_crops: 512
 
 # Size of the input to the model (fixed, e.g., 256)
 # The crops are resized to this dimension before being fed to the model
 # Output is then resized back to size_crops
-input_dimension: 256
+input_dimension: 512
 
 ###############################
 #### Multi-scale crop settings ####
@@ -111,10 +111,10 @@ input_dimension: 256
 # During training, crop size is sampled uniformly between min and max
 # Set min_crop_size = max_crop_size to disable multi-scale
 min_crop_size: 512      # Minimum crop size (pixels)
-max_crop_size: 2048     # Maximum crop size (pixels)
+max_crop_size: 512     # Maximum crop size (pixels)
 
 # Fixed crop size for evaluation/validation
-eval_crop_size: 1024
+eval_crop_size: 512
 
 # Classes 1 - 4
 nb_class: 4
@@ -148,3 +148,10 @@ scale_area: None
 
 # Sigma value for gaussian filter in distance map
 sigma: 30
+
+################################
+## Multi-GPU (DataParallel)   ##
+################################
+# Set True to use all available GPUs via DataParallel.
+# Set False to use single GPU (cuda:0).
+multi_gpu: False

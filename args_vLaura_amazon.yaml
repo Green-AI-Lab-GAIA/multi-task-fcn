@@ -7,7 +7,7 @@ model_dir: exp_vLaura_deeplabvlaura_resnet50_amazon
 checkpoint_file: checkpoint.pth.tar
 
 # Root folder where iterations/outputs will be created (versão 50k samples)
-data_path: "amazon_data/vLaura_deeplabvlaura_v4_512"
+data_path: "amazon_data/vLaura_deeplabvlaura_v4_v512"
 
 note: "Experimento vLaura v4 - DeepLabVLaura com encoder ResNet-50 (pre-activation, ELU) e dropout 0.65 no amazon_data, 5000 samples por época"
 
@@ -61,16 +61,16 @@ epochs: 100
 # Amazon tem 17 classes (vs 4 do bioflore), exigindo mais VRAM.
 # GPU 16GB: batch_size 4 for input_dimension 256 (resnet50 encoder, 17 classes)
 # GPU 16GB: batch_size 2 for input_dimension 512 (resnet50 encoder, 17 classes)
-batch_size: 4
+batch_size: 2
 
 # Gradient accumulation: acumula gradientes por N passos antes de atualizar os pesos,
 # simulando um batch_size efetivo de batch_size * gradient_accumulation_steps.
-# Exemplo: batch_size=4, gradient_accumulation_steps=8 → effective_batch_size=32 (igual ao anterior)
-gradient_accumulation_steps: 8
+# Exemplo: batch_size=2, gradient_accumulation_steps=16 → effective_batch_size=32
+gradient_accumulation_steps: 16
 
 # Evaluation batch size (se não especificado, cai para batch_size acima)
 # Manter menor na avaliação evita estouro de memória (CUDA OOM)
-eval_batch_size: 16
+eval_batch_size: 4
 
 # base learning rate
 base_lr: 0.1
@@ -153,3 +153,10 @@ scale_area: None
 
 # Sigma value for gaussian filter in distance map
 sigma: 30
+
+################################
+## Multi-GPU (DataParallel)   ##
+################################
+# Set True to use all available GPUs via DataParallel.
+# Set False to use single GPU (cuda:0).
+multi_gpu: False
