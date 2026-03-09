@@ -163,3 +163,10 @@ scale_area: None
 
 # Sigma value for gaussian filter in distance map
 sigma: 30
+
+################################
+## Multi-GPU (DataParallel)   ##
+################################
+# Set True to use all available GPUs via DataParallel.
+# Set False to use single GPU (cuda:0).
+multi_gpu: False
