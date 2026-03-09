@@ -48,6 +48,9 @@ class DatasetFromCoord(Dataset):
         Minimum crop size for multi-scale cropping. If None, multi-scale is disabled.
     max_crop_size : int, optional
         Maximum crop size for multi-scale cropping. If None, multi-scale is disabled.
+    random_interpolation : bool
+        If True, randomly selects interpolation mode during training augmentation.
+        If False, always uses bilinear interpolation. Default True.
     """
     def __init__(self,
                 image_path: str,
@@ -59,7 +62,8 @@ class DatasetFromCoord(Dataset):
                 augment: bool = False,
                 copy_paste_augmentation: bool = False,
                 min_crop_size: Optional[int] = None,
-                max_crop_size: Optional[int] = None
+                max_crop_size: Optional[int] = None,
+                random_interpolation: bool = True
                 ) -> None: 
         
         super().__init__()
@@ -72,6 +76,7 @@ class DatasetFromCoord(Dataset):
         self.crop_size = crop_size
         self.input_dimension = input_dimension if input_dimension is not None else crop_size
         self.augment = augment
+        self.random_interpolation = random_interpolation
         
         self.copy_paste_augmentation = copy_paste_augmentation
         
@@ -309,21 +314,16 @@ class DatasetFromCoord(Dataset):
 
         # Resize to input_dimension (always needed for multi-scale, or when crop_size != input_dimension)
         if current_crop_size != self.input_dimension:
-            # Choose random interpolation method during training augmentation
-            if self.augment:
-                # Available interpolation modes for 2D images
-                # Note: PyTorch F.interpolate doesn't support 'lanczos' for 2D
+            if self.augment and self.random_interpolation:
                 interpolation_modes = ['nearest', 'bilinear', 'bicubic', 'area']
                 image_mode = np.random.choice(interpolation_modes)
                 distance_map_mode = np.random.choice(interpolation_modes)
             else:
-                # Use bilinear as default for validation/inference
                 image_mode = 'bilinear'
                 distance_map_mode = 'bilinear'
             
             image = self._resize_tensor(image, self.input_dimension, mode=image_mode)
             distance_map = self._resize_tensor(distance_map, self.input_dimension, mode=distance_map_mode)
-            # Segmentation always uses nearest to preserve discrete label values
             segmentation = self._resize_tensor(segmentation, self.input_dimension, mode='nearest')
 
         return image.float(), distance_map.float(), segmentation.long()          
@@ -559,6 +559,9 @@ class MultiRegionDatasetFromCoord(Dataset):
         Minimum crop size for multi-scale cropping. If None, multi-scale is disabled.
     max_crop_size : int, optional
         Maximum crop size for multi-scale cropping. If None, multi-scale is disabled.
+    random_interpolation : bool
+        If True, randomly selects interpolation mode during training augmentation.
+        If False, always uses bilinear interpolation. Default True.
     """
     def __init__(self,
                 image_paths: list,
@@ -571,7 +574,8 @@ class MultiRegionDatasetFromCoord(Dataset):
                 copy_paste_augmentation: bool = False,
                 balance_regions: bool = True,
                 min_crop_size: Optional[int] = None,
-                max_crop_size: Optional[int] = None
+                max_crop_size: Optional[int] = None,
+                random_interpolation: bool = True
                 ) -> None: 
         
         super().__init__()
@@ -589,6 +593,7 @@ class MultiRegionDatasetFromCoord(Dataset):
         self.input_dimension = input_dimension if input_dimension is not None else crop_size
         self.augment = augment
         self.copy_paste_augmentation = copy_paste_augmentation
+        self.random_interpolation = random_interpolation
         self.balance_regions = balance_regions
         
         # Multi-scale crop settings
@@ -834,20 +839,16 @@ class MultiRegionDatasetFromCoord(Dataset):
         
         # Resize to input_dimension (always needed for multi-scale, or when crop_size != input_dimension)
         if current_crop_size != self.input_dimension:
-            # Choose random interpolation method during training augmentation
-            if self.augment:
-                # Available interpolation modes for 2D images
+            if self.augment and self.random_interpolation:
                 interpolation_modes = ['nearest', 'bilinear', 'bicubic', 'area']
                 image_mode = np.random.choice(interpolation_modes)
                 distance_map_mode = np.random.choice(interpolation_modes)
             else:
-                # Use bilinear as default for validation/inference
                 image_mode = 'bilinear'
                 distance_map_mode = 'bilinear'
             
             image = self._resize_tensor(image, self.input_dimension, mode=image_mode)
             distance_map = self._resize_tensor(distance_map, self.input_dimension, mode=distance_map_mode)
-            # Segmentation always uses nearest to preserve discrete label values
             segmentation = self._resize_tensor(segmentation, self.input_dimension, mode='nearest')
         
         return image.float(), distance_map.float(), segmentation.long()
