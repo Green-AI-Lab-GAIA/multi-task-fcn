@@ -424,7 +424,7 @@ def save_checkpoint(last_checkpoint_path:str, model:nn.Module, optimizer:torch.o
     last_checkpoint_path : str
         File path to save checkpoint
     model : nn.Module
-        Pytorch model at the end of epoch
+        Pytorch model at the end of epoch (may be wrapped in DataParallel)
     optimizer : torch.optim.Optimizer
         Pytorch optimizer at the end of epoch
     epoch : int
@@ -432,9 +432,10 @@ def save_checkpoint(last_checkpoint_path:str, model:nn.Module, optimizer:torch.o
     best_val : float
         Best accuracy achieved so far
     """
+    model_to_save = model.module if isinstance(model, nn.DataParallel) else model
     save_dict = {
         "epoch": epoch,
-        "state_dict": model.state_dict(),
+        "state_dict": model_to_save.state_dict(),
         "optimizer": optimizer.state_dict(),
         "is_iter_finished": is_iter_finished,
         "best_val": best_acc,

@@ -19,7 +19,8 @@ from src.logger import create_logger
 from src.model import build_model, load_weights
 from src.dataset import DatasetFromCoord, DatasetForInference
 from src.utils import (add_padding_new, check_folder,
-                       extract_patches_coord, get_device)
+                       extract_patches_coord, get_device,
+                       wrap_model_for_gpu)
 
 from src.io_operations import get_image_metadata, load_norm, read_yaml,  convert_tiff_to_npy, check_file_extension, get_npy_filepath_from_tiff
 from visualization import plot_eval_input_grid
@@ -304,8 +305,10 @@ def evaluate_overlap(prediction_path: str,
     model = load_weights(model, last_checkpoint)
     logger.info(f"Model ({args.arch}) loaded from {last_checkpoint}")
 
-    # Load model to GPU
+    # Load model to GPU and optionally wrap with DataParallel
     model = model.to(DEVICE)
+    multi_gpu = getattr(args, 'multi_gpu', False)
+    model = wrap_model_for_gpu(model, multi_gpu=multi_gpu)
 
     cudnn.benchmark = True
 
