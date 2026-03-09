@@ -6,10 +6,10 @@ model_dir: exp_vLaura_deeplabvlaura_resnet50_amazon
 
 checkpoint_file: checkpoint.pth.tar
 
-# Root folder where iterations/outputs will be created (versão 50k samples)
-data_path: "amazon_data/vLaura_deeplabvlaura_v4_v512"
+# Root folder where iterations/outputs will be created
+data_path: "amazon_data/vLaura_deeplabvlaura_v6_run_01"
 
-note: "Experimento vLaura v4 - DeepLabVLaura com encoder ResNet-50 (pre-activation, ELU) e dropout 0.65 no amazon_data, 5000 samples por época"
+note: "Experimento vLaura v6 - DeepLabVLaura ResNet-50, cosine_warmup, dropout 0.5, crop 512, input 256, interpolação fixa bilinear"
 
 # Input data for the model
 
@@ -37,18 +37,16 @@ validation_set: "train"
 #################################
 ###### TRAINING parameters ######
 downsampling_factor: None
-# num samples per epoch (aumentado para 50.000)
+# num samples per epoch
 samples: 5000
 # True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
-# convnet architecture --> DeepLabVLaura com encoder ResNet-50 (mesmo padrão pre-activation/ELU do paper)
+# convnet architecture
 arch: deeplabvlaura_resnet50
-# True for load pretrained weights from Imagenet (não aplicável para esta arquitetura)
 is_pretrained: False
 batch_norm: true
-# Dropout rate for deepvlab classification training
-dropout_rate: 0.65
+dropout_rate: 0.5
 
 # regularization weight of distance map
 lambda_weight: 1
@@ -56,43 +54,32 @@ lambda_weight: 1
 ### optim parameters ###
 # number of total epochs to run
 epochs: 100
-# batch size per gpu, i.e. how many unique instances per gpu
-# NOTA: ResNet-50 encoder usa downsampling /32, gerando feature maps menores na memória.
-# Amazon tem 17 classes (vs 4 do bioflore), exigindo mais VRAM.
-# GPU 16GB: batch_size 4 for input_dimension 256 (resnet50 encoder, 17 classes)
-# GPU 16GB: batch_size 2 for input_dimension 512 (resnet50 encoder, 17 classes)
-batch_size: 2
+# batch size per gpu (input 256 usa menos VRAM → batch maior)
+batch_size: 8
 
-# Gradient accumulation: acumula gradientes por N passos antes de atualizar os pesos,
-# simulando um batch_size efetivo de batch_size * gradient_accumulation_steps.
-# Exemplo: batch_size=2, gradient_accumulation_steps=16 → effective_batch_size=32
-gradient_accumulation_steps: 16
+# Gradient accumulation: effective_batch_size = 8 * 4 = 32
+gradient_accumulation_steps: 4
 
-# Evaluation batch size (se não especificado, cai para batch_size acima)
-# Manter menor na avaliação evita estouro de memória (CUDA OOM)
-eval_batch_size: 4
+# Evaluation batch size
+eval_batch_size: 16
 
 # base learning rate
 base_lr: 0.1
 # final learning rate
 final_lr: 0.0001
 # number of warmup epochs
-warmup_epochs: 5
+warmup_epochs: 10
 # initial warmup learning rate
 start_warmup: 0.0
 
 # weight decay
 weight_decay: 1e-06
 
-# Early stopping patience: number of epochs without improvement before stopping
+# Early stopping patience
 patience: 5
 
-# Learning rate schedule: "cosine_warmup" or "step_decay"
-# "step_decay" multiplies lr by step_decay_rate every step_decay_every epochs
-# (inverse time decay as in Cué La Rosa et al., 2021)
-lr_schedule_type: step_decay
-step_decay_rate: 0.1
-step_decay_every: 5
+# Learning rate schedule: cosine_warmup (decaimento suave, sem quedas bruscas)
+lr_schedule_type: cosine_warmup
 
 ### others parameters ###
 # number of data loading workers
@@ -104,28 +91,31 @@ seed: 3115
 #### Evaluation parameters ####
 ###############################
 
-# Size of crops extracted from the image (can be large, e.g., 1024)
+# Size of crops extracted from the image
 size_crops: 512
 
-# Size of the input to the model (must be divisible by 4)
-input_dimension: 512
+# Size of the input to the model (resized from crop)
+input_dimension: 256
 
 ###############################
 #### Multi-scale crop settings ####
 ###############################
 
-# During training, crop size is sampled uniformly between min and max
-# Set min_crop_size = max_crop_size to disable multi-scale
-min_crop_size: 512      # Minimum crop size (pixels)
-max_crop_size: 512     # Maximum crop size (pixels)
+# Fixed crop size (min == max disables multi-scale)
+min_crop_size: 512
+max_crop_size: 512
 
 # Fixed crop size for evaluation/validation
 eval_crop_size: 512
 
+# Interpolation mode for resizing crops during training
+# False = fixed bilinear interpolation
+random_interpolation: False
+
 # Amazon classes (labels 1..17)
 nb_class: 17
 
-# samples per epoch
+# overlap rates for evaluation
 overlap: [0.3, 0.5]
 
 ################################
@@ -136,11 +126,10 @@ overlap: [0.3, 0.5]
 prob_thr: 0.7
 depth_thr: 0.5
 
-# Num of iter - CONFIGURADO PARA 1 ITERAÇÃO APENAS
+# Num of iter
 num_iter: 1
 
 # Area filter thresholds in square meters (m²)
-# Valores baseados nos experimentos antigos do Amazon (ex.: 13_amazon_data / 15_amazon_data)
 lower_limit_area: 25000
 upper_limit_area: "inf"
 
@@ -153,10 +142,3 @@ scale_area: None
 
 # Sigma value for gaussian filter in distance map
 sigma: 30
-
-################################
-## Multi-GPU (DataParallel)   ##
-################################
-# Set True to use all available GPUs via DataParallel.
-# Set False to use single GPU (cuda:0).
-multi_gpu: False
