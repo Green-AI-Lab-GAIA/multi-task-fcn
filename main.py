@@ -50,7 +50,8 @@ from src.metrics import (
 from src.model import eval, load_weights, save_checkpoint, train, build_model
 from src.utils import (check_folder, fix_random_seeds, from_255_to_1,
                        get_device, print_sucess,
-                       restart_from_checkpoint, restore_checkpoint_variables)
+                       restart_from_checkpoint, restore_checkpoint_variables,
+                       wrap_model_for_gpu, unwrap_model)
 from src.vector_operations import (
     compute_reference_stats,
     geodataframe_to_raster,
@@ -857,6 +858,10 @@ def train_iteration(current_iter_folder: str, args: dict):
     )
     logger.info(f"[DEBUG] Checkpoint restored: epoch={to_restore['epoch']}, best_val={to_restore['best_val']}, is_iter_finished={to_restore['is_iter_finished']}")
 
+    # Wrap with DataParallel after loading weights (multi_gpu from YAML)
+    multi_gpu = getattr(args, 'multi_gpu', False)
+    model = wrap_model_for_gpu(model, multi_gpu=multi_gpu)
+
     if loaded_from_last_iteration:
         to_restore["epoch"] = 0
         to_restore["best_val"] = 0.0
@@ -1192,6 +1197,8 @@ def generate_labels_for_next_iteration(current_iter_folder: str, args: dict):
         model = load_weights(model, checkpoint_path)
         device = get_device()
         model = model.to(device)
+        multi_gpu = getattr(args, 'multi_gpu', False)
+        model = wrap_model_for_gpu(model, multi_gpu=multi_gpu)
         model.eval()
         
         # Load training samples (selected labels used to train current model)
