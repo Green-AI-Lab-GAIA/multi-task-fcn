@@ -40,6 +40,34 @@ def get_device():
     return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
+def wrap_model_for_gpu(model: torch.nn.Module, multi_gpu: bool = False) -> torch.nn.Module:
+    """Optionally wrap model with DataParallel for multi-GPU training.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model already on the primary device (cuda:0).
+    multi_gpu : bool
+        If True and more than one GPU is available, wrap with DataParallel.
+
+    Returns
+    -------
+    torch.nn.Module
+        The original model or a DataParallel-wrapped model.
+    """
+    if multi_gpu and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        logger.info(f"Multi-GPU enabled: using {torch.cuda.device_count()} GPUs via DataParallel")
+        model = torch.nn.DataParallel(model)
+    return model
+
+
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Return the underlying model, stripping DataParallel wrapper if present."""
+    if isinstance(model, torch.nn.DataParallel):
+        return model.module
+    return model
+
+
 def run_in_thread(func):
     """
     Decorator to run a function in a separate thread.
