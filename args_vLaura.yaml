@@ -9,7 +9,7 @@ checkpoint_file: checkpoint.pth.tar
 # Root folder where iterations/outputs will be created (versão 50k samples)
 data_path: "bioflore_data/vLaura_v4_512"
 
-note: "Experimento vLaura v3 - DeepLabVLaura com encoder ResNet-18 (pre-activation, ELU) e dropout 0.65 - 1 iteração, 5000 samples por época"
+note: "Experimento vLaura v4 - DeepLabVLaura com encoder ResNet-50 (pre-activation, ELU) e dropout 0.65 - 1 iteração, 5000 samples por época"
 
 # Input data for the model
 
@@ -51,7 +51,7 @@ samples: 5000
 # True for data augmentation during training
 augment: True
 copy_and_paste_augmentation: False
-# convnet architecture --> DeepLabVLaura com encoder ResNet-18 (mesmo padrão pre-activation/ELU do paper)
+# convnet architecture --> DeepLabVLaura com encoder ResNet-50 (mesmo padrão pre-activation/ELU do paper)
 arch: deeplabvlaura_resnet50
 # True for load pretrained weights from Imagenet (não aplicável para esta arquitetura)
 is_pretrained: False
@@ -66,10 +66,9 @@ lambda_weight: 1
 # number of total epochs to run
 epochs: 50
 # batch size per gpu, i.e. how many unique instances per gpu
-# NOTA: ResNet-18 encoder usa downsampling /4 (vs /32 do ResNet-50), gerando feature maps
-# 64x maiores na memória. Com GPU 16GB e input 256, batch_size 8 é o limite seguro.
-# GPU 16GB: batch_size 8 for input_dimension 256 (resnet18 encoder)
-# GPU 16GB: batch_size 4 for input_dimension 512 (resnet18 encoder)
+# NOTA: ResNet-50 encoder usa downsampling /32, gerando feature maps menores na memória.
+# GPU 16GB: batch_size 8 for input_dimension 256 (resnet50 encoder)
+# GPU 16GB: batch_size 4 for input_dimension 512 (resnet50 encoder)
 batch_size: 4
 
 # Gradient accumulation: acumula gradientes por N passos antes de atualizar os pesos,
