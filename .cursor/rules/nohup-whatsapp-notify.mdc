@@ -1,0 +1,12 @@
+---
+description: Sempre notificar via WhatsApp ao rodar treinos com nohup
+alwaysApply: true
+---
+
+# Notificação WhatsApp em treinos nohup
+
+Ao montar comandos `nohup` para treinos, sempre incluir notificação via `notify_whatsapp.sh` com mensagem de sucesso ou falha:
+
+```bash
+nohup bash -c 'python main.py <args>.yaml && bash notify_whatsapp.sh "<nome> finalizado com sucesso!" || bash notify_whatsapp.sh "<nome> falhou!"' > nohup_<nome>.out 2>&1 &
+```
